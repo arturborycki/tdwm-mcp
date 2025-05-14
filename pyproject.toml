@@ -1,0 +1,22 @@
+[project]
+name = "tdwm-mcp"
+version = "0.1.0"
+description = "Teradata Workload Management MCP"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "mcp>=1.8.1",
+    "pydantic>=2.11.4",
+    "teradatasql>=20.0.0.30",
+]
+
+[[project.authors]]
+name = "Artur Borycki"
+email = "artur.borycki@gmail.com"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project.scripts]
+tdwm-mcp = "tdwm_mcp:main"
