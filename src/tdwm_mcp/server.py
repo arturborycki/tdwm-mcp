@@ -55,18 +55,77 @@ async def execute_query(query: str) -> ResponseType:
         raise
 
 
-async def list_db() -> ResponseType:
-    """List all databases in the Teradata."""
+async def list_sessions() -> ResponseType:
+    """Show my sessions"""
     try:
         global _tdconn
         cur = _tdconn.cursor()
-        rows = cur.execute("select DataBaseName, DECODE(DBKind, 'U', 'User', 'D','DataBase') as DBType , CommentString from dbc.DatabasesV dv where OwnerName <> 'PDCRADM'")
+        rows = cur.execute("SELECT * FROM TABLE (monitormysessions()) as t1")
         return format_text_response(list([row for row in rows.fetchall()]))
     except Exception as e:
-        logger.error(f"Error listing schemas: {e}")
+        logger.error(f"Error showing sessions: {e}")
         return format_error_response(str(e))
 
+async def list_resources() -> ResponseType:
+    """Show physical resources"""
+    try:
+        global _tdconn
+        cur = _tdconn.cursor()
+        rows = cur.execute("SELECT t2.* from table (MonitorPhysicalResource()) as t2")
+        return format_text_response(list([row for row in rows.fetchall()]))
+    except Exception as e:
+        logger.error(f"Error showing sessions: {e}")
+        return format_error_response(str(e))
 
+async def show_session_sql_steps(SessionNo: int) -> ResponseType:
+    """Show sql steps for a session {SessionNo}"""
+    try:
+        global _tdconn
+        cur = _tdconn.cursor()
+        rows = cur.execute("SELECT HostId, LogonPENo FROM TABLE (monitormysessions()) as t1 where SessionNo = ?", (SessionNo,))
+        row = rows.fetchall()[0]
+        hostId = row[0]
+        logonPENo = row[1]
+        query = """
+            select 
+                SQLStep,
+                StepNum (format '99') Num,
+                Confidence (format '9') C,
+                EstRowCount (format '-99999999') ERC,
+                ActRowCount (format '99999999') ARC,
+                EstRowCountSkew (format '-99999999') ERCS,
+                ActRowCountSkew (format '99999999') ARCS,
+                EstRowCountSkewMatch (format '-99999999') ERCSM,
+                ActRowCountSkewMatch (format '99999999') ARCSM,
+                EstElapsedTime (format '99999') EET,
+                ActElapsedTime (format '99999') AET
+            from 
+                table (MonitorSQLSteps({hostId},{SessionNo},{logonPENo})) as t2
+            """.format(hostId=hostId, SessionNo=SessionNo, logonPENo=logonPENo)
+        cur1 = _tdconn.cursor()
+        rows1 = cur1.execute(query)
+        return format_text_response(list([row for row in rows1.fetchall()]))
+    except Exception as e:
+        logger.error(f"Error showing sessions: {e}")
+        return format_error_response(str(e))
+
+async def show_session_sql_text(SessionNo: int) -> ResponseType:
+    """Show sql text for a session {SessionNo}"""
+    try:
+        global _tdconn
+        cur = _tdconn.cursor()
+        rows = cur.execute("SELECT HostId, LogonPENo FROM TABLE (monitormysessions()) as t1 where SessionNo = ?", (SessionNo,))
+        row = rows.fetchall()[0]
+        hostId = row[0]
+        logonPENo = row[1]
+        query = "SELECT SQLTxt FROM TABLE (MonitorSQLText(({hostId},{SessionNo},{logonPENo})) as t2".format(hostId=hostId, SessionNo=SessionNo, logonPENo=logonPENo)
+        cur1 = _tdconn.cursor()
+        rows1 = cur1.execute(query)
+        return format_text_response(list([row for row in rows1.fetchall()]))
+    except Exception as e:
+        logger.error(f"Error showing sessions: {e}")
+        return format_error_response(str(e))
+    
 async def main():
     logger.info("Starting Teradata Workload Management MCP Server")
     server = Server("teradata-mcp")
@@ -117,11 +176,47 @@ async def main():
                 },
             ),
             types.Tool(
-                name="list_db",
-                description="List all databases in the Teradata system",
+                name="show_sessions",
+                description="Show my sessions",
                 inputSchema={
                     "type": "object",
                     "properties": {},
+                },
+            ),
+            types.Tool(
+                name="show_physical_resources",
+                description="Monitor system resources",
+                inputSchema={
+                    "type": "object",
+                    "properties": {},
+                },
+            ),
+            types.Tool(
+                name="show_sql_steps_for_session",
+                description="Show SQL steps for a session",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "sessionNo": {
+                            "type": "integer",
+                            "description": "Session Number",
+                        },
+                    },
+                    "required": ["sessionNo"],
+                },
+            ),
+            types.Tool(
+                name="show_sql_text_for_session",
+                description="Show SQL text for a session",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "sessionNo": {
+                            "type": "integer",
+                            "description": "Session Number",
+                        },
+                    },
+                    "required": ["sessionNo"],
                 },
             ),
         ]
@@ -143,8 +238,17 @@ async def main():
                     ]
                 tool_response = await execute_query(arguments["query"])
                 return tool_response
-            elif name == "list_db":
-                tool_response = await list_db()
+            elif name == "show_sessions":
+                tool_response = await list_sessions()
+                return tool_response
+            elif name == "show_physical_resources":
+                tool_response = await list_resources()
+                return tool_response
+            elif name == "show_sql_steps_for_session":
+                tool_response = await show_session_sql_steps(arguments["sessionNo"])
+                return tool_response
+            elif name == "show_sql_text_for_session":
+                tool_response = await show_session_sql_steps(arguments["sessionNo"])
                 return tool_response
             return [types.TextContent(type="text", text=f"Unsupported tool: {name}")]
 
