@@ -37,24 +37,6 @@ def format_error_response(error: str) -> ResponseType:
     return format_text_response(f"Error: {error}")
 logger = logging.getLogger("teradata_mcp")
 
-async def execute_query(query: str) -> ResponseType:
-    """Execute a SQL query and return results as a list """
-    logger.debug(f"Executing query: {query}")
-    global _tdconn
-    try:
-        cur = _tdconn.cursor()
-        rows = cur.execute(query)
-        if rows is None:
-            return format_text_response("No results")
-        return format_text_response(list([row for row in rows.fetchall()]))
-    except Exception as e:
-        logger.error(f"Error executing query: {e}")
-        return format_error_response(str(e))
-    except Exception as e:
-        logger.error(f"Database error executing query: {e}")
-        raise
-
-
 async def list_sessions() -> ResponseType:
     """Show my sessions"""
     try:
@@ -64,6 +46,39 @@ async def list_sessions() -> ResponseType:
         return format_text_response(list([row for row in rows.fetchall()]))
     except Exception as e:
         logger.error(f"Error showing sessions: {e}")
+        return format_error_response(str(e))
+
+async def monitor_amp_load() -> ResponseType:
+    """Monitor AMP load"""
+    try:
+        global _tdconn
+        cur = _tdconn.cursor()
+        rows = cur.execute("SELECT * FROM TABLE (MonitorAMPLoad()) AS t1")
+        return format_text_response(list([row for row in rows.fetchall()]))
+    except Exception as e:
+        logger.error(f"Error showing AMPs: {e}")
+        return format_error_response(str(e))
+
+async def monitor_awt() -> ResponseType:
+    """Monitor AWT resources """
+    try:
+        global _tdconn
+        cur = _tdconn.cursor()
+        rows = cur.execute("SELECT * FROM TABLE (MonitorAWTResource(1,2,3,4)) AS t1")
+        return format_text_response(list([row for row in rows.fetchall()]))
+    except Exception as e:
+        logger.error(f"Error showing AMPs: {e}")
+        return format_error_response(str(e))
+
+async def monitor_config() -> ResponseType:
+    """Monitor Teradata config """
+    try:
+        global _tdconn
+        cur = _tdconn.cursor()
+        rows = cur.execute("SELECT t2.* FROM TABLE (MonitorVirtualConfig()) AS t2")
+        return format_text_response(list([row for row in rows.fetchall()]))
+    except Exception as e:
+        logger.error(f"Error showing AMPs: {e}")
         return format_error_response(str(e))
 
 async def list_resources() -> ResponseType:
@@ -82,7 +97,7 @@ async def show_session_sql_steps(SessionNo: int) -> ResponseType:
     try:
         global _tdconn
         cur = _tdconn.cursor()
-        rows = cur.execute("SELECT HostId, LogonPENo FROM TABLE (monitormysessions()) as t1 where SessionNo = ?", (SessionNo,))
+        rows = cur.execute("SELECT HostId, LogonPENo FROM TABLE (monitormysessions()) as t1 where SessionNo = ?", [SessionNo])
         row = rows.fetchall()[0]
         hostId = row[0]
         logonPENo = row[1]
@@ -114,11 +129,11 @@ async def show_session_sql_text(SessionNo: int) -> ResponseType:
     try:
         global _tdconn
         cur = _tdconn.cursor()
-        rows = cur.execute("SELECT HostId, LogonPENo FROM TABLE (monitormysessions()) as t1 where SessionNo = ?", (SessionNo,))
+        rows = cur.execute("SELECT HostId, LogonPENo FROM TABLE (monitormysessions()) as t1 where SessionNo = ?", [SessionNo])
         row = rows.fetchall()[0]
         hostId = row[0]
         logonPENo = row[1]
-        query = "SELECT SQLTxt FROM TABLE (MonitorSQLText(({hostId},{SessionNo},{logonPENo})) as t2".format(hostId=hostId, SessionNo=SessionNo, logonPENo=logonPENo)
+        query = "SELECT SQLTxt FROM TABLE (MonitorSQLText({hostId},{SessionNo},{logonPENo})) as t2".format(hostId=hostId, SessionNo=SessionNo, logonPENo=logonPENo)
         cur1 = _tdconn.cursor()
         rows1 = cur1.execute(query)
         return format_text_response(list([row for row in rows1.fetchall()]))
@@ -162,20 +177,6 @@ async def main():
         logger.info("Listing tools")
         return [
             types.Tool(
-                name="query",
-                description="Executes a SQL query against the Teradata database",
-                inputSchema={
-                    "type": "object",
-                    "properties": {
-                        "query": {
-                            "type": "string",
-                            "description": "SQL query to execute that is a dialect of Teradata SQL",
-                        },
-                    },
-                    "required": ["query"],
-                },
-            ),
-            types.Tool(
                 name="show_sessions",
                 description="Show my sessions",
                 inputSchema={
@@ -186,6 +187,30 @@ async def main():
             types.Tool(
                 name="show_physical_resources",
                 description="Monitor system resources",
+                inputSchema={
+                    "type": "object",
+                    "properties": {},
+                },
+            ),
+            types.Tool(
+                name="monitor_amp_load",
+                description="Monitor AMP load",
+                inputSchema={
+                    "type": "object",
+                    "properties": {},
+                },
+            ),
+              types.Tool(
+                name="monitor_awt",
+                description="Monitor AWT resources",
+                inputSchema={
+                    "type": "object",
+                    "properties": {},
+                },
+            ),
+              types.Tool(
+                name="monitor_config",
+                description="Monitor virtual config",
                 inputSchema={
                     "type": "object",
                     "properties": {},
@@ -231,24 +256,26 @@ async def main():
         """
         logger.info(f"Calling tool: {name}::{arguments}")
         try:
-            if name == "query":
-                if arguments is None:
-                    return [
-                        types.TextContent(type="text", text="Error: No query provided")
-                    ]
-                tool_response = await execute_query(arguments["query"])
-                return tool_response
-            elif name == "show_sessions":
+            if name == "show_sessions":
                 tool_response = await list_sessions()
                 return tool_response
             elif name == "show_physical_resources":
                 tool_response = await list_resources()
                 return tool_response
+            elif name == "monitor_amp_load":
+                tool_response = await monitor_amp_load()
+                return tool_response
+            elif name == "monitor_awt":
+                tool_response = await monitor_awt()
+                return tool_response
+            elif name == "monitor_config":
+                tool_response = await monitor_config()
+                return tool_response
             elif name == "show_sql_steps_for_session":
                 tool_response = await show_session_sql_steps(arguments["sessionNo"])
                 return tool_response
             elif name == "show_sql_text_for_session":
-                tool_response = await show_session_sql_steps(arguments["sessionNo"])
+                tool_response = await show_session_sql_text(arguments["sessionNo"])
                 return tool_response
             return [types.TextContent(type="text", text=f"Unsupported tool: {name}")]
 
