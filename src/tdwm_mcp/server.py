@@ -124,7 +124,7 @@ async def abort_sessions_user(usr: str) -> ResponseType:
         return format_error_response(str(e))
 
 async def list_active_WD() -> ResponseType:
-    """List workloads (WD)"""
+    """List active workloads (WD)"""
     try:
         global _tdconn
         cur = _tdconn.cursor()
@@ -133,6 +133,18 @@ async def list_active_WD() -> ResponseType:
     except Exception as e:
         logger.error(f"Error showing sessions: {e}")
         return format_error_response(str(e))
+
+async def list_WDs() -> ResponseType:
+    """List workloads (WD)"""
+    try:
+        global _tdconn
+        cur = _tdconn.cursor()
+        rows = cur.execute("""SELECT * FROM TABLE (TDWM.TDWMListWDs('Y')) AS t1""")
+        return format_text_response(list([row for row in rows.fetchall()]))
+    except Exception as e:
+        logger.error(f"Error showing sessions: {e}")
+        return format_error_response(str(e))
+
 
 async def show_session_sql_steps(SessionNo: int) -> ResponseType:
     """Show sql steps for a session {SessionNo}"""
@@ -330,6 +342,14 @@ async def main():
                 },
             ),
             types.Tool(
+                name="list_WD",
+                description="List workloads (WD)",
+                inputSchema={
+                    "type": "object",
+                    "properties": {},
+                },
+            ),
+            types.Tool(
                 name="abort_sessions_user",
                 description="Abort sessions for a user",
                 inputSchema={
@@ -407,6 +427,9 @@ async def main():
                 return tool_response
             elif name == "list_active_WD":
                 tool_response = await list_active_WD()
+                return tool_response
+            elif name == "list_WD":
+                tool_response = await list_WDs()
                 return tool_response
             elif name == "list_delayed_request":
                 tool_response = await list_delayed_request()
