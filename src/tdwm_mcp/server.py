@@ -92,6 +92,48 @@ async def list_resources() -> ResponseType:
         logger.error(f"Error showing sessions: {e}")
         return format_error_response(str(e))
 
+async def identify_blocking() -> ResponseType:
+    """Identify blocking users"""
+    try:
+        global _tdconn
+        cur = _tdconn.cursor()
+        rows = cur.execute("""
+            SELECT 
+                IdentifyUser(blk1userid) as "blocking user",
+                IdentifyTable(blk1objtid) as "blocking table",
+                IdentifyDatabase(blk1objdbid) as "blocking db"
+            FROM TABLE (MonitorSession(-1,'*',0)) AS t1
+            WHERE Blk1UserId > 0""")
+        return format_text_response(list([row for row in rows.fetchall()]))
+    except Exception as e:
+        logger.error(f"Error showing sessions: {e}")
+        return format_error_response(str(e))
+
+async def abort_sessions_user(usr: str) -> ResponseType:
+    """Abort sessions for a user {usr}"""
+    try:
+        global _tdconn
+        cur = _tdconn.cursor()
+        rows = cur.execute("""
+            SELECT AbortSessions (HostId, UserName, SessionNo, 'Y', 'Y')
+            FROM TABLE (MonitorSession(-1, '*', 0)) AS t1
+            WHERE username= ?""", [usr])
+        return format_text_response(list([row for row in rows.fetchall()]))
+    except Exception as e:
+        logger.error(f"Error showing sessions: {e}")
+        return format_error_response(str(e))
+
+async def list_active_WD() -> ResponseType:
+    """List workloads (WD)"""
+    try:
+        global _tdconn
+        cur = _tdconn.cursor()
+        rows = cur.execute("""sel * from table (tdwm.TDWMActiveWDs()) as t1""")
+        return format_text_response(list([row for row in rows.fetchall()]))
+    except Exception as e:
+        logger.error(f"Error showing sessions: {e}")
+        return format_error_response(str(e))
+
 async def show_session_sql_steps(SessionNo: int) -> ResponseType:
     """Show sql steps for a session {SessionNo}"""
     try:
@@ -140,7 +182,34 @@ async def show_session_sql_text(SessionNo: int) -> ResponseType:
     except Exception as e:
         logger.error(f"Error showing sessions: {e}")
         return format_error_response(str(e))
-    
+
+async def list_delayed_request(SessionNo: int) -> ResponseType:
+    """List all of the delayed queries"""
+    try:
+        global _tdconn
+        cur = _tdconn.cursor()
+        rows = cur.execute("""
+            SELECT * FROM TABLE (TDWM.TDWMGetDelayedQueries('O')) AS t1""")
+        return format_text_response(list([row for row in rows.fetchall()]))
+    except Exception as e:
+        logger.error(f"Error showing sessions: {e}")
+        return format_error_response(str(e))
+
+
+async def abort_delayed_request(SessionNo: int) -> ResponseType:
+    """Abort delay requests on session {SessionNo}"""
+    try:
+        global _tdconn
+        cur = _tdconn.cursor()
+        rows = cur.execute("""
+            SELECT TDWM.TDWMAbortDelayedRequest(HostId, SessionNo, RequestNo, 0)
+            FROM TABLE (TDWM.TDWMGetDelayedQueries('O')) AS t1
+            WHERE SessionNo=?""",[SessionNo])
+        return format_text_response(list([row for row in rows.fetchall()]))
+    except Exception as e:
+        logger.error(f"Error showing sessions: {e}")
+        return format_error_response(str(e))
+
 async def main():
     logger.info("Starting Teradata Workload Management MCP Server")
     server = Server("teradata-mcp")
@@ -208,7 +277,7 @@ async def main():
                     "properties": {},
                 },
             ),
-              types.Tool(
+            types.Tool(
                 name="monitor_config",
                 description="Monitor virtual config",
                 inputSchema={
@@ -244,6 +313,59 @@ async def main():
                     "required": ["sessionNo"],
                 },
             ),
+            types.Tool(
+                name="identify_blocking",
+                description="Identify blocking users",
+                inputSchema={
+                    "type": "object",
+                    "properties": {},
+                },
+            ),
+            types.Tool(
+                name="list_active_WD",
+                description="List active workloads (WD)",
+                inputSchema={
+                    "type": "object",
+                    "properties": {},
+                },
+            ),
+            types.Tool(
+                name="abort_sessions_user",
+                description="Abort sessions for a user",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "user": {
+                            "type": "string",
+                            "description": "User name to abort",
+                        },
+                    },
+                    "required": ["user"],
+                },
+            ),
+            types.Tool(
+                name="list_delayed_request",
+                description="List all of the delayed queries",
+                inputSchema={
+                    "type": "object",
+                    "properties": {},
+                },
+            ),
+            types.Tool(
+                name="abort_delayed_request",
+                description="abort a delayed request on session {sessionNo}",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "sessionNo": {
+                            "type": "integer",
+                            "description": "Session Number",
+                        },
+                    },
+                    "required": ["sessionNo"],
+                },
+            ),
+
         ]
     
     @server.call_tool()
@@ -276,6 +398,21 @@ async def main():
                 return tool_response
             elif name == "show_sql_text_for_session":
                 tool_response = await show_session_sql_text(arguments["sessionNo"])
+                return tool_response
+            elif name == "identify_blocking":
+                tool_response = await identify_blocking()
+                return tool_response
+            elif name == "abort_sessions_user":
+                tool_response = await abort_sessions_user(arguments["user"])
+                return tool_response
+            elif name == "list_active_WD":
+                tool_response = await list_active_WD()
+                return tool_response
+            elif name == "list_delayed_request":
+                tool_response = await list_delayed_request()
+                return tool_response
+            elif name == "abort_delayed_request":
+                tool_response = await abort_delayed_request(arguments["sessionNo"])
                 return tool_response
             return [types.TextContent(type="text", text=f"Unsupported tool: {name}")]
 
