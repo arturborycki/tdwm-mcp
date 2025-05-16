@@ -60,7 +60,7 @@ async def monitor_amp_load() -> ResponseType:
         return format_error_response(str(e))
 
 async def monitor_awt() -> ResponseType:
-    """Monitor AWT resources """
+    """Monitor AWT (Amp Worker Tasks) resources """
     try:
         global _tdconn
         cur = _tdconn.cursor()
@@ -222,6 +222,96 @@ async def abort_delayed_request(SessionNo: int) -> ResponseType:
         logger.error(f"Error showing sessions: {e}")
         return format_error_response(str(e))
 
+async def list_utility_stats() -> ResponseType:
+    """List statistics for use utilitites"""
+    try:
+        global _tdconn
+        cur = _tdconn.cursor()
+        rows = cur.execute("""
+            SELECT * FROM TABLE (TDWM.TDWMLoadUtilStatistics()) AS t1""")
+        return format_text_response(list([row for row in rows.fetchall()]))
+    except Exception as e:
+        logger.error(f"Error showing sessions: {e}")
+        return format_error_response(str(e))
+
+async def display_delay_queue(Type: str) -> ResponseType:
+    """Display {Type} delay queue details"""
+    try:
+        global _tdconn
+        cur = _tdconn.cursor()
+        if Type.upper == "WORKLOAD":
+            rows = cur.execute("""
+                SELECT * FROM TABLE (TDWM.TDWMGetDelayedQueries('W')) AS t1;""")
+        elif Type.upper == "SYSTEM":
+            rows = cur.execute("""
+                SELECT * FROM TABLE (TDWM.TDWMGetDelayedQueries('O')) AS t1""")
+        elif Type.upper == "UTILITY":
+            rows = cur.execute("""
+                SELECT * FROM TABLE (TDWM.TDWMGetDelayedUtilities()) AS t1;""")
+        else:
+            rows = cur.execute("""
+                SELECT * FROM TABLE (TDWM.TDWMGetDelayedQueries('A')) AS t1""")
+        return format_text_response(list([row for row in rows.fetchall()]))
+    except Exception as e:
+        logger.error(f"Error showing sessions: {e}")
+        return format_error_response(str(e))
+
+async def release_delay_queue(SessionNo: int, UserName: str) -> ResponseType:
+    """Releases a request or utility session in the queue for session or user"""
+    try:
+        global _tdconn
+        cur = _tdconn.cursor()
+        if SessionNo:
+            rows = cur.execute("""
+                SELECT TDWM.TDWMReleaseDelayedRequest(HostId, SessionNo, RequestNo, 0)
+                FROM TABLE (TDWMGetDelayedQueries('O')) AS t1
+                WHERE SessionNo=?""",[SessionNo])
+        elif UserName:
+            rows = cur.execute("""
+                SELECT TDWM.TDWMReleaseDelayedRequest(HostId, SessionNo, RequestNo, 0)
+                FROM TABLE (TDWMGetDelayedQueries('O')) AS t1
+                WHERE t1.Username=?""",[UserName])
+        return format_text_response(list([row for row in rows.fetchall()]))
+    except Exception as e:
+        logger.error(f"Error showing sessions: {e}")
+        return format_error_response(str(e))
+
+async def show_tdwm_summary() -> ResponseType:
+    """Show workloads summary information"""
+    try:
+        global _tdconn
+        cur = _tdconn.cursor()
+        rows = cur.execute("""SELECT * FROM TABLE (TDWM.TDWMSummary()) AS t2""")
+        return format_text_response(list([row for row in rows.fetchall()]))
+    except Exception as e:
+        logger.error(f"Error showing sessions: {e}")
+        return format_error_response(str(e))
+    
+async def show_trottle_statistics(type: str) -> ResponseType:
+    """Show throttle statistics for {type}"""
+    try:
+        global _tdconn
+        cur = _tdconn.cursor()
+        if type.upper() == "ALL":
+            rows = cur.execute("""SELECT * FROM TABLE (TDWM.TDWMTHROTTLESTATISTICS('A')) AS t1""")
+        elif type.upper() == "QUERY":
+            rows = cur.execute("""SELECT * FROM TABLE (TDWM.TDWMTHROTTLESTATISTICS('Q')) AS t1""")
+        elif type.upper() == "SESSION":
+            rows = cur.execute("""SELECT * FROM TABLE (TDWM.TDWMTHROTTLESTATISTICS('S')) AS t1""")
+        elif type.upper() == "WORKLOAD":
+            rows = cur.execute("""SELECT * FROM TABLE (TDWM.TDWMTHROTTLESTATISTICS('W')) AS t1""")
+        else:
+            rows = cur.execute("""
+                    SELECT ObjectType(FORMAT 'x(10)'), rulename(FORMAT 'x(17)'),
+                        ObjectName(FORMAT 'x(13)'), active(FORMAT 'Z9'),
+                        throttlelimit as ThrLimit, delayed(FORMAT 'Z9'), throttletype as ThrType
+                    FROM TABLE (TDWM.TDWMTHROTTLESTATISTICS('A')) AS t1
+                    ORDER BY 1,2""")     
+        return format_text_response(list([row for row in rows.fetchall()]))
+    except Exception as e:
+        logger.error(f"Error showing sessions: {e}")
+        return format_error_response(str(e))
+
 async def main():
     logger.info("Starting Teradata Workload Management MCP Server")
     server = Server("teradata-mcp")
@@ -283,7 +373,7 @@ async def main():
             ),
               types.Tool(
                 name="monitor_awt",
-                description="Monitor AWT resources",
+                description="Monitor AWT (Amp Worker Task) resources",
                 inputSchema={
                     "type": "object",
                     "properties": {},
@@ -385,7 +475,68 @@ async def main():
                     "required": ["sessionNo"],
                 },
             ),
-
+            types.Tool(
+                name="list_utility_stats",
+                description="List statistics for utility use on the system",
+                inputSchema={
+                    "type": "object",
+                    "properties": {},
+                },
+            ),
+            types.Tool(
+                name="display_delay_queue",
+                description="display {type} delay queue",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "type": {
+                            "type": "string",
+                            "description": "type of delay queue",
+                        },
+                    },
+                    "required": ["sessionNo"],
+                },
+            ),
+            types.Tool(
+                name="release_delay_queue",
+                description="Releases a request or utility session in the queue for session {sessionNo} or user {userName}",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "sessionNo": {
+                            "type": "integer",
+                            "description": "Session Number",
+                        },
+                        "userName": {
+                            "type": "string",
+                            "description": "User name to release",
+                        },
+                    },
+                    "required": [],
+                },
+            ), 
+            types.Tool(
+                name="show_tdwm_summary",
+                description="Show workloads summary information",
+                inputSchema={
+                    "type": "object",
+                    "properties": {},
+                },
+            ),       
+            types.Tool(
+                name="show_trottle_statistics",
+                description="Show throttle statistics for {type}",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "type": {
+                            "type": "string",
+                            "description": "Type of throttle statistics",
+                        },
+                    },
+                    "required": [],
+                },
+            ),    
         ]
     
     @server.call_tool()
@@ -436,6 +587,21 @@ async def main():
                 return tool_response
             elif name == "abort_delayed_request":
                 tool_response = await abort_delayed_request(arguments["sessionNo"])
+                return tool_response
+            elif name == "list_utility_stats":
+                tool_response = await list_utility_stats()
+                return tool_response
+            elif name == "display_delay_queue":
+                tool_response = await display_delay_queue(arguments["type"])
+                return tool_response
+            elif name == "release_delay_queue":
+                tool_response = await release_delay_queue(arguments["sessionNo"], arguments["userName"])
+                return tool_response
+            elif name == "show_tdwm_summary":
+                tool_response = await show_tdwm_summary()
+                return tool_response
+            elif name == "show_trottle_statistics":
+                tool_response = await show_trottle_statistics(arguments["type"])
                 return tool_response
             return [types.TextContent(type="text", text=f"Unsupported tool: {name}")]
 
