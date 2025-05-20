@@ -353,6 +353,30 @@ async def list_query_band(Type: str) -> ResponseType:
         logger.error(f"Error showing sessions: {e}")
         return format_error_response(str(e))
 
+async def show_query_log(User: str) -> ResponseType:
+    """Show query log for user {User}"""
+    try:
+        global _tdconn
+        cur = _tdconn.cursor()
+        rows = cur.execute("""
+                sel * from dbc.qrylogv where upper(username)=upper(?) and trunc(collectTimeStamp) = trunc(date) ORDER BY queryid""", [User])
+        return format_text_response(list([row for row in rows.fetchall()]))
+    except Exception as e:
+        logger.error(f"Error showing sessions: {e}")
+        return format_error_response(str(e))
+
+async def show_cod_limits() -> ResponseType:
+    """Show COD (Capacity On Demand) limits"""
+    try:
+        global _tdconn
+        cur = _tdconn.cursor()
+        rows = cur.execute("""
+                SELECT * FROM TABLE (TD_SYSFNLIB.TD_get_COD_Limits( ) ) As d""")
+        return format_text_response(list([row for row in rows.fetchall()]))
+    except Exception as e:
+        logger.error(f"Error showing sessions: {e}")
+        return format_error_response(str(e))
+
 async def main():
     logger.info("Starting Teradata Workload Management MCP Server")
     server = Server("teradata-mcp")
@@ -605,7 +629,30 @@ async def main():
                     },
                     "required": ["sessionNo"],
                 },
-            ),    
+            ),  
+            types.Tool(
+                name="show_query_log",
+                description="Show query log for user {user}",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "user": {
+                            "type": "string",
+                            "description": "Session Number",
+                        },
+                    },
+                    "required": ["user"],
+                },
+            ), 
+            types.Tool(
+                name="show_cod_limits",
+                description="Show COD (Capacity On Demand) limits",
+                inputSchema={
+                    "type": "object",
+                    "properties": {},
+                },
+            ),
+             
         ]
     
     @server.call_tool()
@@ -677,6 +724,12 @@ async def main():
                 return tool_response
             elif name == "monitor_session_query_band":
                 tool_response = await monitor_session_query_band(arguments["sessionNo"])
+                return tool_response
+            elif name == "show_query_log":
+                tool_response = await show_query_log(arguments["user"])
+                return tool_response
+            elif name == "show_cod_limits":
+                tool_response = await show_cod_limits()
                 return tool_response
             return [types.TextContent(type="text", text=f"Unsupported tool: {name}")]
 
