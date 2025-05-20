@@ -178,6 +178,25 @@ async def show_session_sql_steps(SessionNo: int) -> ResponseType:
         logger.error(f"Error showing sessions: {e}")
         return format_error_response(str(e))
 
+async def monitor_session_query_band(SessionNo: int) -> ResponseType:
+    """Monitor query band for session {SessionNo}"""
+    try:
+        global _tdconn
+        cur = _tdconn.cursor()
+        rows = cur.execute("SELECT HostId, LogonPENo FROM TABLE (monitormysessions()) as t1 where SessionNo = ?", [SessionNo])
+        row = rows.fetchall()[0]
+        hostId = row[0]
+        logonPENo = row[1]
+        query = """
+            SELECT MonitorQueryBand({hostId},{SessionNo},{logonPENo})
+            """.format(hostId=hostId, SessionNo=SessionNo, logonPENo=logonPENo)
+        cur1 = _tdconn.cursor()
+        rows1 = cur1.execute(query)
+        return format_text_response(list([row for row in rows1.fetchall()]))
+    except Exception as e:
+        logger.error(f"Error showing sessions: {e}")
+        return format_error_response(str(e))
+
 async def show_session_sql_text(SessionNo: int) -> ResponseType:
     """Show sql text for a session {SessionNo}"""
     try:
@@ -247,7 +266,7 @@ async def display_delay_queue(Type: str) -> ResponseType:
                 SELECT * FROM TABLE (TDWM.TDWMGetDelayedQueries('O')) AS t1""")
         elif Type.upper == "UTILITY":
             rows = cur.execute("""
-                SELECT * FROM TABLE (TDWM.TDWMGetDelayedUtilities()) AS t1;""")
+                SELECT * FROM TABLE (TDWM.TDWMGetDelayedUtilities()) AS t1""")
         else:
             rows = cur.execute("""
                 SELECT * FROM TABLE (TDWM.TDWMGetDelayedQueries('A')) AS t1""")
@@ -307,6 +326,28 @@ async def show_trottle_statistics(type: str) -> ResponseType:
                         throttlelimit as ThrLimit, delayed(FORMAT 'Z9'), throttletype as ThrType
                     FROM TABLE (TDWM.TDWMTHROTTLESTATISTICS('A')) AS t1
                     ORDER BY 1,2""")     
+        return format_text_response(list([row for row in rows.fetchall()]))
+    except Exception as e:
+        logger.error(f"Error showing sessions: {e}")
+        return format_error_response(str(e))
+    
+async def list_query_band(Type: str) -> ResponseType:
+    """List query band for {Type}"""
+    try:
+        global _tdconn
+        cur = _tdconn.cursor()
+        if Type.upper == "TRANSACTION":
+            rows = cur.execute("""
+                SELECT * FROM TABLE(GetQueryBandPairs(1)) AS t1""")
+        elif Type.upper == "PROFILE":
+            rows = cur.execute("""
+                SELECT * FROM TABLE(GetQueryBandPairs(3)) AS t1""")
+        elif Type.upper == "SESSION":
+            rows = cur.execute("""
+                SELECT * FROM TABLE(GetQueryBandPairs(2)) AS t1""")
+        else:
+            rows = cur.execute("""
+                SELECT * FROM TABLE(GetQueryBandPairs(0)) AS t1""")
         return format_text_response(list([row for row in rows.fetchall()]))
     except Exception as e:
         logger.error(f"Error showing sessions: {e}")
@@ -536,6 +577,34 @@ async def main():
                     },
                     "required": [],
                 },
+            ),
+            types.Tool(
+                name="list_query_band",
+                description="List query band for {type}",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "type": {
+                            "type": "string",
+                            "description": "Type of query band",
+                        },
+                    },
+                    "required": [],
+                },
+            ),   
+            types.Tool(
+                name="monitor_session_query_band",
+                description="Monitor query band for session {sessionNo}",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "sessionNo": {
+                            "type": "integer",
+                            "description": "Session Number",
+                        },
+                    },
+                    "required": ["sessionNo"],
+                },
             ),    
         ]
     
@@ -602,6 +671,12 @@ async def main():
                 return tool_response
             elif name == "show_trottle_statistics":
                 tool_response = await show_trottle_statistics(arguments["type"])
+                return tool_response
+            elif name == "list_query_band":
+                tool_response = await list_query_band(arguments["type"])
+                return tool_response
+            elif name == "monitor_session_query_band":
+                tool_response = await monitor_session_query_band(arguments["sessionNo"])
                 return tool_response
             return [types.TextContent(type="text", text=f"Unsupported tool: {name}")]
 
