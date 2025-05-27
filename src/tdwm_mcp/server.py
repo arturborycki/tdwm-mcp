@@ -20,6 +20,7 @@ from mcp.server.models import InitializationOptions
 from mcp.server.stdio import stdio_server
 from .tdsql import obfuscate_password
 from .tdsql import TDConn
+from .tdwm_static import TDWM_CLASIFICATION_TYPE
 
 
 
@@ -376,6 +377,225 @@ async def show_cod_limits() -> ResponseType:
     except Exception as e:
         logger.error(f"Error showing sessions: {e}")
         return format_error_response(str(e))
+    
+async def tdwm_list_clasification() -> ResponseType:
+    """List clasification types for workload (TASM) rule"""
+    return format_text_response(list([(entry[1], entry[2], entry[3], entry[4]) for entry in TDWM_CLASIFICATION_TYPE]))
+
+async def show_top_users(type: str) -> ResponseType:
+    """Show {type} users using resources"""
+    try:
+        global _tdconn
+        cur = _tdconn.cursor()
+        if type.upper() == "TOP":
+            query = """
+                Sel top 15 Username (Format 'x(10)'), queryband(Format 'x(40)'),AppID, ClientAddr, StartTime, AMPCPUTime, QueryText from dbc.qrylogV
+                where ampcputime > .154 order by ampcputime desc"""
+        else:
+            query = """
+                Sel Username (Format 'x(10)'), queryband(Format 'x(40)'),AppID, ClientAddr, StartTime, AMPCPUTime, QueryText from dbc.qrylogV
+                where ampcputime > .154 order by ampcputime desc"""
+        rows = cur.execute(query)
+        return format_text_response(list([row for row in rows.fetchall()]))
+    except Exception as e:
+        logger.error(f"Error showing sessions: {e}")
+        return format_error_response(str(e))
+
+async def show_sw_event_log(type: str) -> ResponseType:
+    """Show {type} event log """
+    try:
+        global _tdconn
+        cur = _tdconn.cursor()
+        if type.upper() == "OPERATIONAL":
+            query = """SELECT top 20
+                TheDate, 
+                TheTime, 
+                Event_Tag, 
+                Category, 
+                Severity, 
+                Text,
+                PMA, 
+                Vproc, 
+                Partition, 
+                Task, 
+                TheFunction, 
+                SW_Version, 
+                Line 
+            FROM 
+                DBC.SW_EVENT_LOG  
+            WHERE
+                (trunc(TheDate) between trunc(date-7) and trunc(date)) and
+                theFunction IS NOT NULL AND
+                Text LIKE '%operational%'
+            ORDER BY 
+                TheDate desc, TheTime desc;"""
+        else:
+            query = """SELECT top 20
+                TheDate, 
+                TheTime, 
+                Event_Tag, 
+                Category, 
+                Severity, 
+                Text,
+                PMA, 
+                Vproc, 
+                Partition, 
+                Task, 
+                TheFunction, 
+                SW_Version, 
+                Line 
+            FROM 
+                DBC.SW_EVENT_LOG  
+            WHERE
+                (trunc(TheDate) between trunc(date-1) and trunc(date)) and
+                theFunction IS NOT NULL AND
+                Text LIKE '%operational%' or Text LIKE '%Event%'
+            ORDER BY 
+                TheDate desc, TheTime desc;"""
+        rows = cur.execute(query)
+        return format_text_response(list([row for row in rows.fetchall()]))
+    except Exception as e:
+        logger.error(f"Error showing sessions: {e}")
+        return format_error_response(str(e))
+
+async def show_tasm_statistics() -> ResponseType:
+    """Show TASM statistics"""
+    try:
+        global _tdconn
+        cur = _tdconn.cursor()
+        rows = cur.execute("""
+            select
+                TheDatePN (FORMAT'yy/mm/dd', TITLE '// //Date'),
+                TheHour (TITLE '// //Hour'),
+                TheMinute (TITLE '// //Minute'),
+                DayOfWeek (TITLE 'Day of Week'),
+                NodeID (TITLE '//Node ID'),
+                rulenamePN (TITLE '//Workload//Name'),
+                ppidPN (FORMAT '9', TITLE '// //PP ID'),
+                pgidPN (FORMAT 'ZZ9', TITLE '// //PG ID')
+            --	average(RelWgtPN) (FORMAT 'ZZ9', TITLE 'Active//Relative// Weight')
+                ,average(CPUPctPN) (FORMAT 'ZZ9.9', TITLE 'CPU//Util// %')
+                ,average(PhysicalIOPN) (FORMAT 'ZZ9.9', TITLE 'Avg//I/Os//per Sec')
+                ,average(PhysicalIOMBPN) (FORMAT 'ZZ9.9', TITLE 'Avg//I/O Mbytes//per Sec')
+                ,average(WorkMsgSendDelayCntPN) (FORMAT 'ZZ9.9', TITLE '# AWT Requests//Successfully Sent//per AMP')
+                ,average(NumRequestsPN) (FORMAT 'ZZ9.9', TITLE '# Tasks//Assigned AWTs//per AMP')
+                ,average(AwtReleasesPN) (FORMAT 'ZZ9.9', TITLE '# AWTs//Released//per AMP')
+                ,average(QLengthAmpAvgAPN) (FORMAT 'ZZ9.9', TITLE '# Requests//Still Waiting//for AWT')
+            --	,max(QLengthMaxMPN) (FORMAT 'ZZ9.9', TITLE 'Max #//Tasks Waiting//for AWT')
+                ,max(WorkMsgSendDelayMPN) (FORMAT 'ZZ9.99', TITLE 'Max//Send-Side//Wait')
+                ,max(QWaitTimeMaxMPN) (FORMAT 'ZZ9.99', TITLE 'Max//Receive-Side//Wait')
+                ,max(WorkMsgReceiveDelayMPN) (FORMAT 'ZZ9.99', TITLE 'Max//Receive-Side//Still Waiting')
+                ,average(zeroifnull(WorkMsgSendDelayRequestAPN)) (FORMAT 'ZZ9.99', TITLE 'Avg//Send-Side//Wait')
+                ,average(zeroifnull(QwaitTimeRequestAPN)) (FORMAT 'ZZ9.99', TITLE 'Avg//Receive- Side//Wait')
+                ,average(zeroifnull(WorkMsgReceiveDelayRequestAPN)) (FORMAT 'ZZ9.99', TITLE 'Avg//Receive-Side//Still Waiting')
+                ,max(ServiceTimeMPN) (FORMAT 'ZZ9.99', TITLE 'Max//Time//AWT Held')
+                ,average(zeroifnull(ServiceTimeAPN)) (FORMAT 'ZZ9.99', TITLE 'Avg//Time//AWT Held')
+                ,max(WorkTimeInUseMPN) (FORMAT 'ZZ9.99', TITLE 'Max//Time//AWT Held or Still Held')
+            --	,max(WorkTypeInUseMPN) (FORMAT 'ZZ9.9', TITLE 'Pseudo-Max//AWTs//In Use')
+                ,average(AwtUsedAPN) (FORMAT 'ZZ9.9', TITLE 'Avg//AWTs//In Use')
+            FROM
+            (
+                select
+                    t1.TheDate as TheDatePN
+                    ,extract(hour from t1.thetime) TheHour
+                    ,extract(Minute from t1.thetime) TheMinute
+                    ,CASE WHEN day_of_week = 1 THEN 'Sunday'
+                    WHEN day_of_week = 2 THEN 'Monday'
+                    WHEN day_of_week = 3 THEN 'Tuesday'
+                    WHEN day_of_week = 4 THEN 'Wednesday'
+                    WHEN day_of_week = 5 THEN 'Thursday'
+                    WHEN day_of_week = 6 THEN 'Friday'
+                    WHEN day_of_week = 7 THEN 'Saturday'
+                    END AS dayofweek,
+                    NodeId,
+                    rulename as
+                    rulenamePN,
+                    ppid as ppidPN,
+                    pgid as pgidPN
+            --		average(RelWgt) as RelWgtPN
+                    ,SUM(CPUPct) as CPUPctPN
+                    ,sum((PhysicalReadPerm +
+                    PhysicalWritePerm+PhysicalReadOther+PhysicalWriteOther)/(CentiSecs/100)) as
+                    PhysicalIOPN
+                    ,sum((PhysicalReadPermKB +
+                    PhysicalWritePermKB+PhysicalReadOtherKB+PhysicalWriteOtherKB)/(1024*CentiSecs/100)) as PhysicalIOMBPN
+                    ,sum(WorkMsgSendDelayCnt/AmpCount) as WorkMsgSendDelayCntPN
+                    ,sum(NumRequests/AmpCount) as NumRequestsPN
+                    ,sum(AwtReleases/AmpCount) as AwtReleasesPN
+                    ,sum(WorkMsgReceiveDelayCnt/AmpCount) as QLengthAmpAvgAPN
+            --		,max(WorkMsgReceiveDelayCntMax) as QLengthMaxMPN
+                    ,max(WorkMsgSendDelayMax) as WorkMsgSendDelayMPN
+                    ,max(WorkMsgReceiveDelayMax) as WorkMsgReceiveDelayMPN
+                    ,max(QWaitTimeMax) as QWaitTimeMaxMPN
+                    ,sum(WorkMsgSendDelayRequestAvg) as WorkMsgSendDelayRequestAPN
+                    ,sum(WorkMsgReceiveDelayRequestAvg) as WorkMsgReceiveDelayRequestAPN
+                    ,sum(QWaitTimeRequestAvg) as QWaitTimeRequestAPN
+                    ,sum(ServiceTimeRequestAvg) as ServiceTimeAPN
+                    ,max(ServiceTimeMax) as ServiceTimeMPN
+                    ,max(WorkTimeInUseMax) as WorkTimeInUseMPN
+                    ,sum(AWTUsedAvg/AmpCount) as AwtUsedAPN
+            --		,max(WorkTypeInUseMax/AmpCount) as WorkTypeInUseMPN
+                FROM 
+                    DBC.ResSpsView as T1
+                    LEFT OUTER JOIN
+                    tdwm.RuleDefs as T2
+                    on (T1.WDid = T2.RuleId AND T2.RuleType =5)
+                    inner join
+                    sys_calendar.CALENDAR b
+                    on calendar_date = thedate
+                where thedate = date and active >0 group by 1,2,3,4,5,6,7,8
+            ) as SumPNTbl
+            group by 1,2,3,4,5,6,7,8 order by 1,2,3,4,5,6,7""")
+        return format_text_response(list([row for row in rows.fetchall()]))
+    except Exception as e:
+        logger.error(f"Error showing sessions: {e}")
+        return format_error_response(str(e))
+    
+async def show_tasm_even_history() -> ResponseType:
+    """Show TASM event history"""
+    try:
+        global _tdconn
+        cur = _tdconn.cursor()
+        rows = cur.execute("""
+            SELECT entryts,
+                SUBSTR(entrykind,1,10) "kind",
+                SUBSTR (entryname,1,20) "name",
+                CAST (eventvalue as float format '999.9999') "evt value",
+                CAST (lastvalue as float format '999.9999') "last value",
+                spare2 "spare Int",
+                SUBSTR (activity,1,10) "activity id",
+                SUBSTR (activityname,1,20) "act name", seqno
+            FROM tdwmeventhistory order by entryts, seqno""")
+        return format_text_response(list([row for row in rows.fetchall()]))
+    except Exception as e:
+        logger.error(f"Error showing sessions: {e}")
+        return format_error_response(str(e))
+
+async def show_tasm_rule_history_red() -> ResponseType:
+    """what caused the system to enter the RED state"""
+    try:
+        global _tdconn
+        cur = _tdconn.cursor()
+        rows = cur.execute("""
+            WITH RECURSIVE
+            CausalAnalysis(EntryTS,
+            EntryKind, EntryID, EntryName, Activity,Activityid) AS
+            (
+            SELECT EntryTS, EntryKind, EntryID, EntryName, Activity, Activityid
+            FROM DBC.TDWMEventHistory
+            WHERE EntryKind = 'SYSCON' AND EntryName = 'RED' AND Activity = 'ACTIVE'
+            UNION ALL
+            SELECT Cause.EntryTS,Cause.EntryKind,Cause.EntryID,
+                Cause.EntryName,Cause.Activity,Cause.Activityid
+            FROM CausalAnalysis Condition INNER JOIN DBC.TDWMEventHistory Cause
+            ON Condition.EntryKind = Cause.Activity AND
+                Condition.EntryID = Cause.Activityid)
+            SELECT * FROM CausalAnalysis
+            ORDER BY 1 DESC""")
+        return format_text_response(list([row for row in rows.fetchall()]))
+    except Exception as e:
+        logger.error(f"Error showing sessions: {e}")
+        return format_error_response(str(e))
 
 async def main():
     logger.info("Starting Teradata Workload Management MCP Server")
@@ -393,6 +613,8 @@ async def main():
         global _tdconn
     try:
         _tdconn = TDConn(database_url)
+        cur = _tdconn.cursor()
+        cur.execute("SET QUERY_BAND = 'App=GenAI' FOR SESSION;")
         logger.info("Successfully connected to database and initialized connection")
     except Exception as e:
         logger.warning(
@@ -652,7 +874,66 @@ async def main():
                     "properties": {},
                 },
             ),
-             
+            types.Tool(
+                name="tdwm_list_clasification",
+                description="List clasification types for workload (TASM) rule",
+                inputSchema={
+                    "type": "object",
+                    "properties": {},
+                },
+            ),
+            types.Tool(
+                name="show_top_users",
+                description="Show {type} users using the most resources",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "type": {
+                            "type": "string",
+                            "description": "top users",
+                        },
+                    },
+                    "required": [],
+                },
+            ),
+            types.Tool(
+                name="show_sw_event_log",
+                description="Show {Type} event log",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "Type": {
+                            "type": "string",
+                            "description": "Type of the events",
+                        },
+                    },
+                    "required": [],
+                },
+            ),
+            types.Tool(
+                name="show_tasm_statistics",
+                description="Show TASM statistics",
+                inputSchema={
+                    "type": "object",
+                    "properties": {},
+                },
+            ),
+            types.Tool(
+                name="show_tasm_even_history",
+                description="Show TASM event history",
+                inputSchema={
+                    "type": "object",
+                    "properties": {},
+                },
+            ),
+            types.Tool(
+                name="show_tasm_rule_history_red",
+                description="Show what caused the system to enter the RED state",
+                inputSchema={
+                    "type": "object",
+                    "properties": {},
+                },
+            ),
         ]
     
     @server.call_tool()
@@ -730,6 +1011,24 @@ async def main():
                 return tool_response
             elif name == "show_cod_limits":
                 tool_response = await show_cod_limits()
+                return tool_response
+            elif name == "tdwm_list_clasification":
+                tool_response = await tdwm_list_clasification()
+                return tool_response
+            elif name == "show_top_users":
+                tool_response = await show_top_users(arguments["type"])
+                return tool_response
+            elif name == "show_sw_event_log":
+                tool_response = await show_sw_event_log(arguments["Type"])
+                return tool_response
+            elif name == "show_tasm_statistics":
+                tool_response = await show_tasm_statistics()
+                return tool_response
+            elif name == "show_tasm_even_history":
+                tool_response = await show_tasm_even_history()
+                return tool_response
+            elif name == "show_tasm_rule_history_red":
+                tool_response = await show_tasm_rule_history_red()
                 return tool_response
             return [types.TextContent(type="text", text=f"Unsupported tool: {name}")]
 
