@@ -21,7 +21,7 @@ from mcp.server.stdio import stdio_server
 from .tdsql import obfuscate_password
 from .tdsql import TDConn
 from .tdwm_static import TDWM_CLASIFICATION_TYPE
-
+from .prompt import PROMPTS
 
 
 logger = logging.getLogger(__name__)
@@ -596,7 +596,62 @@ async def show_tasm_rule_history_red() -> ResponseType:
     except Exception as e:
         logger.error(f"Error showing sessions: {e}")
         return format_error_response(str(e))
+    
+async def create_filter_rule() -> ResponseType:
+    """Create filter rule"""
+    try:
+        global _tdconn
+        cur = _tdconn.cursor()
+        rows = cur.execute("")
+        return format_text_response(list([row for row in rows.fetchall()]))
+    except Exception as e: 
+        logger.error(f"Error showing sessions: {e}")
+        return format_error_response(str(e))
 
+async def add_class_criteria() -> ResponseType:
+    """Add classification criteria """
+    try:
+        global _tdconn
+        cur = _tdconn.cursor()
+        rows = cur.execute("")
+        return format_text_response(list([row for row in rows.fetchall()]))
+    except Exception as e: 
+        logger.error(f"Error showing sessions: {e}")
+        return format_error_response(str(e))
+
+async def enable_filter_in_default() -> ResponseType:
+    """Enable the filter in the default state"""
+    try:
+        global _tdconn
+        cur = _tdconn.cursor()
+        rows = cur.execute("")
+        return format_text_response(list([row for row in rows.fetchall()]))
+    except Exception as e: 
+        logger.error(f"Error showing sessions: {e}")
+        return format_error_response(str(e))
+    
+async def enable_filter_rule() -> ResponseType:
+    """Enable the filter rule """
+    try:
+        global _tdconn
+        cur = _tdconn.cursor()
+        rows = cur.execute("")
+        return format_text_response(list([row for row in rows.fetchall()]))
+    except Exception as e: 
+        logger.error(f"Error showing sessions: {e}")
+        return format_error_response(str(e))
+
+async def activate_rulset(RuleName: str) -> ResponseType:
+    """Activate the {RuleName} ruleset with the new filter rule. """
+    try:
+        global _tdconn
+        cur = _tdconn.cursor()
+        rows = cur.execute("")
+        return format_text_response(list([row for row in rows.fetchall()]))
+    except Exception as e: 
+        logger.error(f"Error showing sessions: {e}")
+        return format_error_response(str(e))
+                           
 async def main():
     logger.info("Starting Teradata Workload Management MCP Server")
     server = Server("teradata-mcp")
@@ -625,7 +680,21 @@ async def main():
         )
 
     logger.info("Registering handlers")
-        
+
+    @server.list_prompts()
+    async def handle_list_prompts() -> list[types.Prompt]:
+        logger.debug("Handling list_prompts request")
+        return []
+    
+    @server.get_prompt()
+    async def handle_get_prompt(name: str, arguments: dict[str, str] | None) -> types.GetPromptResult:
+        """Generate a prompt based on the requested type"""
+        # Simple argument handling
+        if arguments is None:
+            arguments = {}
+        else:
+            raise ValueError(f"Unknown prompt: {name}")
+    
     @server.list_tools()
     async def handle_list_tools() -> list[types.Tool]:
         """
@@ -934,6 +1003,52 @@ async def main():
                     "properties": {},
                 },
             ),
+            types.Tool(
+                name="create_filter_rule",
+                description="Create filter rule",
+                inputSchema={
+                    "type": "object",
+                    "properties": {},
+                },
+            ),
+            types.Tool(
+                name="add_class_criteria",
+                description="Add classification criteria",
+                inputSchema={
+                    "type": "object",
+                    "properties": {},
+                },
+            ),
+            types.Tool(
+                name="enable_filter_in_default",
+                description="Enable the filter in the default state",
+                inputSchema={
+                    "type": "object",
+                    "properties": {},
+                },
+            ),
+            types.Tool(
+                name="enable_filter_rule",
+                description="Enable the filter rule",
+                inputSchema={
+                    "type": "object",
+                    "properties": {},
+                },
+            ),
+            types.Tool(
+                name="activate_rulset",
+                description="Activate the {RuleName} ruleset with the new filter rule",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "RuleName": {
+                            "type": "string",
+                            "description": "Name of the ruleset to activate",
+                        },
+                    },
+                    "required": ["RuleName"],
+                },
+            ),
         ]
     
     @server.call_tool()
@@ -1029,6 +1144,21 @@ async def main():
                 return tool_response
             elif name == "show_tasm_rule_history_red":
                 tool_response = await show_tasm_rule_history_red()
+                return tool_response
+            elif name == "create_filter_rule":
+                tool_response = await create_filter_rule()
+                return tool_response
+            elif name == "add_class_criteria":
+                tool_response = await add_class_criteria()
+                return tool_response
+            elif name == "enable_filter_in_default":
+                tool_response = await enable_filter_in_default()
+                return tool_response
+            elif name == "enable_filter_rule":
+                tool_response = await enable_filter_rule()
+                return tool_response
+            elif name == "activate_rulset":
+                tool_response = await activate_rulset(arguments["RuleName"])
                 return tool_response
             return [types.TextContent(type="text", text=f"Unsupported tool: {name}")]
 
