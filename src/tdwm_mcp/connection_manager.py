@@ -44,8 +44,8 @@ class TeradataConnectionManager:
         connection = TDConn(self.database_url)
         
         # Set query band to identify MCP queries
-        cur = connection.cursor()
-        cur.execute("SET QUERY_BAND = 'App=TDWM_MCP' FOR SESSION;")
+        #cur = connection.cursor()
+        #cur.execute("SET QUERY_BAND = 'App=TDWM_MCP' FOR SESSION;")
         
         logger.info("Successfully created database connection")
         return connection

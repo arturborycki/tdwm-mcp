@@ -78,13 +78,14 @@ async def initialize_database():
             initial_backoff=initial_backoff,
             max_backoff=max_backoff
         )
-        
-        # Test initial connection
-        await _connection_manager.ensure_connection()
-        
-        # Set the connection manager in the function modules
+        # Register the connection manager with the tool modules now so they
+        # can attempt to establish a connection lazily (via ensure_connection)
+        # even if the initial connection attempt fails below.
         set_tools_connection(_connection_manager, _db)
         set_resource_connection(_connection_manager, _db)
+
+        # Test initial connection (this may still fail; tools will try again on demand)
+        await _connection_manager.ensure_connection()
         logger.info("Successfully connected to database and initialized connection manager")
         
     except Exception as e:

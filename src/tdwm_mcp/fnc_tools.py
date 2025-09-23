@@ -11,6 +11,9 @@ from typing import Any, List
 import mcp.types as types
 from .tdwm_static import TDWM_CLASIFICATION_TYPE
 from .oauth_context import require_oauth_authorization, get_oauth_error
+import os
+from urllib.parse import urlparse
+from .connection_manager import TeradataConnectionManager
 
 logger = logging.getLogger(__name__)
 ResponseType = List[types.TextContent | types.ImageContent | types.EmbeddedResource]
@@ -25,6 +28,29 @@ def set_tools_connection(connection_manager, db: str):
     global _connection_manager, _db
     _connection_manager = connection_manager
     _db = db
+
+
+# If the server was started without running `initialize_database()` (for
+# example when running tools in a subprocess or during quick tests), try to
+# construct a connection manager from the `DATABASE_URI` environment variable
+# so the tools don't immediately raise "Database connection not initialized".
+if not _connection_manager:
+    database_url = os.environ.get("DATABASE_URI")
+    if database_url:
+        try:
+            parsed_url = urlparse(database_url)
+            _db = parsed_url.path.lstrip('/')
+            # Create manager instance; actual network connection will be
+            # established lazily when `ensure_connection()` is called.
+            _connection_manager = TeradataConnectionManager(
+                database_url=database_url,
+                db_name=_db
+            )
+            logger.info("TeradataConnectionManager created from DATABASE_URI environment variable")
+        except Exception:
+            # If parsing fails, leave _connection_manager as None and let
+            # callers report the original error.
+            _connection_manager = None
 
 
 def format_text_response(text: Any) -> ResponseType:

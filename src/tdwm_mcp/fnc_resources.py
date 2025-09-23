@@ -6,8 +6,11 @@ Provides access to database schemas, tables, and TDWM configuration as resources
 """
 
 import logging
-from typing import Any, List
+from typing import Any
 import mcp.types as types
+import os
+from urllib.parse import urlparse
+from .connection_manager import TeradataConnectionManager
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +24,22 @@ def set_resource_connection(connection_manager, db: str):
     global _connection_manager, _db
     _connection_manager = connection_manager
     _db = db
+
+
+# Try lazy creation of a connection manager from `DATABASE_URI` if available
+if not _connection_manager:
+    database_url = os.environ.get("DATABASE_URI")
+    if database_url:
+        try:
+            parsed_url = urlparse(database_url)
+            _db = parsed_url.path.lstrip('/')
+            _connection_manager = TeradataConnectionManager(
+                database_url=database_url,
+                db_name=_db
+            )
+            logger.info("TeradataConnectionManager (resources) created from DATABASE_URI environment variable")
+        except Exception:
+            _connection_manager = None
 
 
 def format_text_response(text: Any) -> str:
