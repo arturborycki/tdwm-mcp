@@ -1,676 +1,93 @@
+"""
+TDWM MCP Server using FastMCP
+Supports all transport methods: stdio, SSE, and streamable-http
+"""
 import argparse
 import asyncio
 import logging
 import os
-import signal
-import re
-import teradatasql
-import yaml
+from starlette.applications import Starlette
+from mcp.server.sse import SseServerTransport
+from starlette.requests import Request
+from starlette.routing import Mount, Route
+from mcp.server import Server
+import uvicorn
 from urllib.parse import urlparse
-from pydantic import AnyUrl
-from typing import Literal
-from typing import Any
-from typing import List
-import io
-from contextlib import redirect_stdout
-import mcp.server.stdio
-import mcp.types as types
-from mcp.server import NotificationOptions, Server
-from mcp.server.models import InitializationOptions
-from mcp.server.stdio import stdio_server
-from .tdsql import obfuscate_password
-from .tdsql import TDConn
-from .tdwm_static import TDWM_CLASIFICATION_TYPE
-from .prompt import PROMPTS
+from mcp.server.fastmcp import FastMCP
 
+from .tdsql import obfuscate_password
+from .connection_manager import TeradataConnectionManager
+from .fnc_tools import (
+    set_tools_connection,
+    handle_list_tools,
+    handle_tool_call
+)
+from .fnc_resources import (
+    set_resource_connection,
+    handle_list_resources,
+    handle_read_resource
+)
+from .fnc_prompts import (
+    handle_list_prompts,
+    handle_get_prompt
+)
+from .auth import (
+    OAuthConfig,
+    ProtectedResourceMetadata, 
+    OAuthMiddleware,
+    OAuthEndpoints
+)
+from .oauth_context import OAuthContext, set_oauth_context
 
 logger = logging.getLogger(__name__)
-ResponseType = List[types.TextContent | types.ImageContent | types.EmbeddedResource]
-_tdconn = TDConn()
 
-def format_text_response(text: Any) -> ResponseType:
-    """Format a text response."""
-    return [types.TextContent(type="text", text=str(text))]
+# Global variables for database connection and OAuth
+_connection_manager = None
+_db = ""
+_oauth_config = None
+_oauth_middleware = None
 
-
-def format_error_response(error: str) -> ResponseType:
-    """Format an error response."""
-    return format_text_response(f"Error: {error}")
-logger = logging.getLogger("teradata_mcp")
-
-async def list_sessions() -> ResponseType:
-    """Show my sessions"""
-    try:
-        global _tdconn
-        cur = _tdconn.cursor()
-        rows = cur.execute("SELECT * FROM TABLE (monitormysessions()) as t1")
-        return format_text_response(list([row for row in rows.fetchall()]))
-    except Exception as e:
-        logger.error(f"Error showing sessions: {e}")
-        return format_error_response(str(e))
-
-async def monitor_amp_load() -> ResponseType:
-    """Monitor AMP load"""
-    try:
-        global _tdconn
-        cur = _tdconn.cursor()
-        rows = cur.execute("SELECT * FROM TABLE (MonitorAMPLoad()) AS t1")
-        return format_text_response(list([row for row in rows.fetchall()]))
-    except Exception as e:
-        logger.error(f"Error showing AMPs: {e}")
-        return format_error_response(str(e))
-
-async def monitor_awt() -> ResponseType:
-    """Monitor AWT (Amp Worker Tasks) resources """
-    try:
-        global _tdconn
-        cur = _tdconn.cursor()
-        rows = cur.execute("SELECT * FROM TABLE (MonitorAWTResource(1,2,3,4)) AS t1")
-        return format_text_response(list([row for row in rows.fetchall()]))
-    except Exception as e:
-        logger.error(f"Error showing AMPs: {e}")
-        return format_error_response(str(e))
-
-async def monitor_config() -> ResponseType:
-    """Monitor Teradata config """
-    try:
-        global _tdconn
-        cur = _tdconn.cursor()
-        rows = cur.execute("SELECT t2.* FROM TABLE (MonitorVirtualConfig()) AS t2")
-        return format_text_response(list([row for row in rows.fetchall()]))
-    except Exception as e:
-        logger.error(f"Error showing AMPs: {e}")
-        return format_error_response(str(e))
-
-async def list_resources() -> ResponseType:
-    """Show physical resources"""
-    try:
-        global _tdconn
-        cur = _tdconn.cursor()
-        rows = cur.execute("SELECT t2.* from table (MonitorPhysicalResource()) as t2")
-        return format_text_response(list([row for row in rows.fetchall()]))
-    except Exception as e:
-        logger.error(f"Error showing sessions: {e}")
-        return format_error_response(str(e))
-
-async def identify_blocking() -> ResponseType:
-    """Identify blocking users"""
-    try:
-        global _tdconn
-        cur = _tdconn.cursor()
-        rows = cur.execute("""
-            SELECT 
-                IdentifyUser(blk1userid) as "blocking user",
-                IdentifyTable(blk1objtid) as "blocking table",
-                IdentifyDatabase(blk1objdbid) as "blocking db"
-            FROM TABLE (MonitorSession(-1,'*',0)) AS t1
-            WHERE Blk1UserId > 0""")
-        return format_text_response(list([row for row in rows.fetchall()]))
-    except Exception as e:
-        logger.error(f"Error showing sessions: {e}")
-        return format_error_response(str(e))
-
-async def abort_sessions_user(usr: str) -> ResponseType:
-    """Abort sessions for a user {usr}"""
-    try:
-        global _tdconn
-        cur = _tdconn.cursor()
-        rows = cur.execute("""
-            SELECT AbortSessions (HostId, UserName, SessionNo, 'Y', 'Y')
-            FROM TABLE (MonitorSession(-1, '*', 0)) AS t1
-            WHERE username= ?""", [usr])
-        return format_text_response(list([row for row in rows.fetchall()]))
-    except Exception as e:
-        logger.error(f"Error showing sessions: {e}")
-        return format_error_response(str(e))
-
-async def list_active_WD() -> ResponseType:
-    """List active workloads (WD)"""
-    try:
-        global _tdconn
-        cur = _tdconn.cursor()
-        rows = cur.execute("""sel * from table (tdwm.TDWMActiveWDs()) as t1""")
-        return format_text_response(list([row for row in rows.fetchall()]))
-    except Exception as e:
-        logger.error(f"Error showing sessions: {e}")
-        return format_error_response(str(e))
-
-async def list_WDs() -> ResponseType:
-    """List workloads (WD)"""
-    try:
-        global _tdconn
-        cur = _tdconn.cursor()
-        rows = cur.execute("""SELECT * FROM TABLE (TDWM.TDWMListWDs('Y')) AS t1""")
-        return format_text_response(list([row for row in rows.fetchall()]))
-    except Exception as e:
-        logger.error(f"Error showing sessions: {e}")
-        return format_error_response(str(e))
-
-
-async def show_session_sql_steps(SessionNo: int) -> ResponseType:
-    """Show sql steps for a session {SessionNo}"""
-    try:
-        global _tdconn
-        cur = _tdconn.cursor()
-        rows = cur.execute("SELECT HostId, LogonPENo FROM TABLE (monitormysessions()) as t1 where SessionNo = ?", [SessionNo])
-        row = rows.fetchall()[0]
-        hostId = row[0]
-        logonPENo = row[1]
-        query = """
-            select 
-                SQLStep,
-                StepNum (format '99') Num,
-                Confidence (format '9') C,
-                EstRowCount (format '-99999999') ERC,
-                ActRowCount (format '99999999') ARC,
-                EstRowCountSkew (format '-99999999') ERCS,
-                ActRowCountSkew (format '99999999') ARCS,
-                EstRowCountSkewMatch (format '-99999999') ERCSM,
-                ActRowCountSkewMatch (format '99999999') ARCSM,
-                EstElapsedTime (format '99999') EET,
-                ActElapsedTime (format '99999') AET
-            from 
-                table (MonitorSQLSteps({hostId},{SessionNo},{logonPENo})) as t2
-            """.format(hostId=hostId, SessionNo=SessionNo, logonPENo=logonPENo)
-        cur1 = _tdconn.cursor()
-        rows1 = cur1.execute(query)
-        return format_text_response(list([row for row in rows1.fetchall()]))
-    except Exception as e:
-        logger.error(f"Error showing sessions: {e}")
-        return format_error_response(str(e))
-
-async def monitor_session_query_band(SessionNo: int) -> ResponseType:
-    """Monitor query band for session {SessionNo}"""
-    try:
-        global _tdconn
-        cur = _tdconn.cursor()
-        rows = cur.execute("SELECT HostId, LogonPENo FROM TABLE (monitormysessions()) as t1 where SessionNo = ?", [SessionNo])
-        row = rows.fetchall()[0]
-        hostId = row[0]
-        logonPENo = row[1]
-        query = """
-            SELECT MonitorQueryBand({hostId},{SessionNo},{logonPENo})
-            """.format(hostId=hostId, SessionNo=SessionNo, logonPENo=logonPENo)
-        cur1 = _tdconn.cursor()
-        rows1 = cur1.execute(query)
-        return format_text_response(list([row for row in rows1.fetchall()]))
-    except Exception as e:
-        logger.error(f"Error showing sessions: {e}")
-        return format_error_response(str(e))
-
-async def show_session_sql_text(SessionNo: int) -> ResponseType:
-    """Show sql text for a session {SessionNo}"""
-    try:
-        global _tdconn
-        cur = _tdconn.cursor()
-        rows = cur.execute("SELECT HostId, LogonPENo FROM TABLE (monitormysessions()) as t1 where SessionNo = ?", [SessionNo])
-        row = rows.fetchall()[0]
-        hostId = row[0]
-        logonPENo = row[1]
-        query = "SELECT SQLTxt FROM TABLE (MonitorSQLText({hostId},{SessionNo},{logonPENo})) as t2".format(hostId=hostId, SessionNo=SessionNo, logonPENo=logonPENo)
-        cur1 = _tdconn.cursor()
-        rows1 = cur1.execute(query)
-        return format_text_response(list([row for row in rows1.fetchall()]))
-    except Exception as e:
-        logger.error(f"Error showing sessions: {e}")
-        return format_error_response(str(e))
-
-async def list_delayed_request(SessionNo: int) -> ResponseType:
-    """List all of the delayed queries"""
-    try:
-        global _tdconn
-        cur = _tdconn.cursor()
-        rows = cur.execute("""
-            SELECT * FROM TABLE (TDWM.TDWMGetDelayedQueries('O')) AS t1""")
-        return format_text_response(list([row for row in rows.fetchall()]))
-    except Exception as e:
-        logger.error(f"Error showing sessions: {e}")
-        return format_error_response(str(e))
-
-
-async def abort_delayed_request(SessionNo: int) -> ResponseType:
-    """Abort delay requests on session {SessionNo}"""
-    try:
-        global _tdconn
-        cur = _tdconn.cursor()
-        rows = cur.execute("""
-            SELECT TDWM.TDWMAbortDelayedRequest(HostId, SessionNo, RequestNo, 0)
-            FROM TABLE (TDWM.TDWMGetDelayedQueries('O')) AS t1
-            WHERE SessionNo=?""",[SessionNo])
-        return format_text_response(list([row for row in rows.fetchall()]))
-    except Exception as e:
-        logger.error(f"Error showing sessions: {e}")
-        return format_error_response(str(e))
-
-async def list_utility_stats() -> ResponseType:
-    """List statistics for use utilitites"""
-    try:
-        global _tdconn
-        cur = _tdconn.cursor()
-        rows = cur.execute("""
-            SELECT * FROM TABLE (TDWM.TDWMLoadUtilStatistics()) AS t1""")
-        return format_text_response(list([row for row in rows.fetchall()]))
-    except Exception as e:
-        logger.error(f"Error showing sessions: {e}")
-        return format_error_response(str(e))
-
-async def display_delay_queue(Type: str) -> ResponseType:
-    """Display {Type} delay queue details"""
-    try:
-        global _tdconn
-        cur = _tdconn.cursor()
-        if Type.upper == "WORKLOAD":
-            rows = cur.execute("""
-                SELECT * FROM TABLE (TDWM.TDWMGetDelayedQueries('W')) AS t1;""")
-        elif Type.upper == "SYSTEM":
-            rows = cur.execute("""
-                SELECT * FROM TABLE (TDWM.TDWMGetDelayedQueries('O')) AS t1""")
-        elif Type.upper == "UTILITY":
-            rows = cur.execute("""
-                SELECT * FROM TABLE (TDWM.TDWMGetDelayedUtilities()) AS t1""")
-        else:
-            rows = cur.execute("""
-                SELECT * FROM TABLE (TDWM.TDWMGetDelayedQueries('A')) AS t1""")
-        return format_text_response(list([row for row in rows.fetchall()]))
-    except Exception as e:
-        logger.error(f"Error showing sessions: {e}")
-        return format_error_response(str(e))
-
-async def release_delay_queue(SessionNo: int, UserName: str) -> ResponseType:
-    """Releases a request or utility session in the queue for session or user"""
-    try:
-        global _tdconn
-        cur = _tdconn.cursor()
-        if SessionNo:
-            rows = cur.execute("""
-                SELECT TDWM.TDWMReleaseDelayedRequest(HostId, SessionNo, RequestNo, 0)
-                FROM TABLE (TDWMGetDelayedQueries('O')) AS t1
-                WHERE SessionNo=?""",[SessionNo])
-        elif UserName:
-            rows = cur.execute("""
-                SELECT TDWM.TDWMReleaseDelayedRequest(HostId, SessionNo, RequestNo, 0)
-                FROM TABLE (TDWMGetDelayedQueries('O')) AS t1
-                WHERE t1.Username=?""",[UserName])
-        return format_text_response(list([row for row in rows.fetchall()]))
-    except Exception as e:
-        logger.error(f"Error showing sessions: {e}")
-        return format_error_response(str(e))
-
-async def show_tdwm_summary() -> ResponseType:
-    """Show workloads summary information"""
-    try:
-        global _tdconn
-        cur = _tdconn.cursor()
-        rows = cur.execute("""SELECT * FROM TABLE (TDWM.TDWMSummary()) AS t2""")
-        return format_text_response(list([row for row in rows.fetchall()]))
-    except Exception as e:
-        logger.error(f"Error showing sessions: {e}")
-        return format_error_response(str(e))
+async def initialize_database():
+    """Initialize database connection from environment or command line."""
+    global _connection_manager, _db
     
-async def show_trottle_statistics(type: str) -> ResponseType:
-    """Show throttle statistics for {type}"""
-    try:
-        global _tdconn
-        cur = _tdconn.cursor()
-        if type.upper() == "ALL":
-            rows = cur.execute("""SELECT * FROM TABLE (TDWM.TDWMTHROTTLESTATISTICS('A')) AS t1""")
-        elif type.upper() == "QUERY":
-            rows = cur.execute("""SELECT * FROM TABLE (TDWM.TDWMTHROTTLESTATISTICS('Q')) AS t1""")
-        elif type.upper() == "SESSION":
-            rows = cur.execute("""SELECT * FROM TABLE (TDWM.TDWMTHROTTLESTATISTICS('S')) AS t1""")
-        elif type.upper() == "WORKLOAD":
-            rows = cur.execute("""SELECT * FROM TABLE (TDWM.TDWMTHROTTLESTATISTICS('W')) AS t1""")
-        else:
-            rows = cur.execute("""
-                    SELECT ObjectType(FORMAT 'x(10)'), rulename(FORMAT 'x(17)'),
-                        ObjectName(FORMAT 'x(13)'), active(FORMAT 'Z9'),
-                        throttlelimit as ThrLimit, delayed(FORMAT 'Z9'), throttletype as ThrType
-                    FROM TABLE (TDWM.TDWMTHROTTLESTATISTICS('A')) AS t1
-                    ORDER BY 1,2""")     
-        return format_text_response(list([row for row in rows.fetchall()]))
-    except Exception as e:
-        logger.error(f"Error showing sessions: {e}")
-        return format_error_response(str(e))
-    
-async def list_query_band(Type: str) -> ResponseType:
-    """List query band for {Type}"""
-    try:
-        global _tdconn
-        cur = _tdconn.cursor()
-        if Type.upper == "TRANSACTION":
-            rows = cur.execute("""
-                SELECT * FROM TABLE(GetQueryBandPairs(1)) AS t1""")
-        elif Type.upper == "PROFILE":
-            rows = cur.execute("""
-                SELECT * FROM TABLE(GetQueryBandPairs(3)) AS t1""")
-        elif Type.upper == "SESSION":
-            rows = cur.execute("""
-                SELECT * FROM TABLE(GetQueryBandPairs(2)) AS t1""")
-        else:
-            rows = cur.execute("""
-                SELECT * FROM TABLE(GetQueryBandPairs(0)) AS t1""")
-        return format_text_response(list([row for row in rows.fetchall()]))
-    except Exception as e:
-        logger.error(f"Error showing sessions: {e}")
-        return format_error_response(str(e))
-
-async def show_query_log(User: str) -> ResponseType:
-    """Show query log for user {User}"""
-    try:
-        global _tdconn
-        cur = _tdconn.cursor()
-        rows = cur.execute("""
-                sel * from dbc.qrylogv where upper(username)=upper(?) and trunc(collectTimeStamp) = trunc(date) ORDER BY queryid""", [User])
-        return format_text_response(list([row for row in rows.fetchall()]))
-    except Exception as e:
-        logger.error(f"Error showing sessions: {e}")
-        return format_error_response(str(e))
-
-async def show_cod_limits() -> ResponseType:
-    """Show COD (Capacity On Demand) limits"""
-    try:
-        global _tdconn
-        cur = _tdconn.cursor()
-        rows = cur.execute("""
-                SELECT * FROM TABLE (TD_SYSFNLIB.TD_get_COD_Limits( ) ) As d""")
-        return format_text_response(list([row for row in rows.fetchall()]))
-    except Exception as e:
-        logger.error(f"Error showing sessions: {e}")
-        return format_error_response(str(e))
-    
-async def tdwm_list_clasification() -> ResponseType:
-    """List clasification types for workload (TASM) rule"""
-    return format_text_response(list([(entry[1], entry[2], entry[3], entry[4]) for entry in TDWM_CLASIFICATION_TYPE]))
-
-async def show_top_users(type: str) -> ResponseType:
-    """Show {type} users using resources"""
-    try:
-        global _tdconn
-        cur = _tdconn.cursor()
-        if type.upper() == "TOP":
-            query = """
-                Sel top 15 Username (Format 'x(10)'), queryband(Format 'x(40)'),AppID, ClientAddr, StartTime, AMPCPUTime, QueryText from dbc.qrylogV
-                where ampcputime > .154 order by ampcputime desc"""
-        else:
-            query = """
-                Sel Username (Format 'x(10)'), queryband(Format 'x(40)'),AppID, ClientAddr, StartTime, AMPCPUTime, QueryText from dbc.qrylogV
-                where ampcputime > .154 order by ampcputime desc"""
-        rows = cur.execute(query)
-        return format_text_response(list([row for row in rows.fetchall()]))
-    except Exception as e:
-        logger.error(f"Error showing sessions: {e}")
-        return format_error_response(str(e))
-
-async def show_sw_event_log(type: str) -> ResponseType:
-    """Show {type} event log """
-    try:
-        global _tdconn
-        cur = _tdconn.cursor()
-        if type.upper() == "OPERATIONAL":
-            query = """SELECT top 20
-                TheDate, 
-                TheTime, 
-                Event_Tag, 
-                Category, 
-                Severity, 
-                Text,
-                PMA, 
-                Vproc, 
-                Partition, 
-                Task, 
-                TheFunction, 
-                SW_Version, 
-                Line 
-            FROM 
-                DBC.SW_EVENT_LOG  
-            WHERE
-                (trunc(TheDate) between trunc(date-7) and trunc(date)) and
-                theFunction IS NOT NULL AND
-                Text LIKE '%operational%'
-            ORDER BY 
-                TheDate desc, TheTime desc;"""
-        else:
-            query = """SELECT top 20
-                TheDate, 
-                TheTime, 
-                Event_Tag, 
-                Category, 
-                Severity, 
-                Text,
-                PMA, 
-                Vproc, 
-                Partition, 
-                Task, 
-                TheFunction, 
-                SW_Version, 
-                Line 
-            FROM 
-                DBC.SW_EVENT_LOG  
-            WHERE
-                (trunc(TheDate) between trunc(date-1) and trunc(date)) and
-                theFunction IS NOT NULL AND
-                Text LIKE '%operational%' or Text LIKE '%Event%'
-            ORDER BY 
-                TheDate desc, TheTime desc;"""
-        rows = cur.execute(query)
-        return format_text_response(list([row for row in rows.fetchall()]))
-    except Exception as e:
-        logger.error(f"Error showing sessions: {e}")
-        return format_error_response(str(e))
-
-async def show_tasm_statistics() -> ResponseType:
-    """Show TASM statistics"""
-    try:
-        global _tdconn
-        cur = _tdconn.cursor()
-        rows = cur.execute("""
-            select
-                TheDatePN (FORMAT'yy/mm/dd', TITLE '// //Date'),
-                TheHour (TITLE '// //Hour'),
-                TheMinute (TITLE '// //Minute'),
-                DayOfWeek (TITLE 'Day of Week'),
-                NodeID (TITLE '//Node ID'),
-                rulenamePN (TITLE '//Workload//Name'),
-                ppidPN (FORMAT '9', TITLE '// //PP ID'),
-                pgidPN (FORMAT 'ZZ9', TITLE '// //PG ID')
-            --	average(RelWgtPN) (FORMAT 'ZZ9', TITLE 'Active//Relative// Weight')
-                ,average(CPUPctPN) (FORMAT 'ZZ9.9', TITLE 'CPU//Util// %')
-                ,average(PhysicalIOPN) (FORMAT 'ZZ9.9', TITLE 'Avg//I/Os//per Sec')
-                ,average(PhysicalIOMBPN) (FORMAT 'ZZ9.9', TITLE 'Avg//I/O Mbytes//per Sec')
-                ,average(WorkMsgSendDelayCntPN) (FORMAT 'ZZ9.9', TITLE '# AWT Requests//Successfully Sent//per AMP')
-                ,average(NumRequestsPN) (FORMAT 'ZZ9.9', TITLE '# Tasks//Assigned AWTs//per AMP')
-                ,average(AwtReleasesPN) (FORMAT 'ZZ9.9', TITLE '# AWTs//Released//per AMP')
-                ,average(QLengthAmpAvgAPN) (FORMAT 'ZZ9.9', TITLE '# Requests//Still Waiting//for AWT')
-            --	,max(QLengthMaxMPN) (FORMAT 'ZZ9.9', TITLE 'Max #//Tasks Waiting//for AWT')
-                ,max(WorkMsgSendDelayMPN) (FORMAT 'ZZ9.99', TITLE 'Max//Send-Side//Wait')
-                ,max(QWaitTimeMaxMPN) (FORMAT 'ZZ9.99', TITLE 'Max//Receive-Side//Wait')
-                ,max(WorkMsgReceiveDelayMPN) (FORMAT 'ZZ9.99', TITLE 'Max//Receive-Side//Still Waiting')
-                ,average(zeroifnull(WorkMsgSendDelayRequestAPN)) (FORMAT 'ZZ9.99', TITLE 'Avg//Send-Side//Wait')
-                ,average(zeroifnull(QwaitTimeRequestAPN)) (FORMAT 'ZZ9.99', TITLE 'Avg//Receive- Side//Wait')
-                ,average(zeroifnull(WorkMsgReceiveDelayRequestAPN)) (FORMAT 'ZZ9.99', TITLE 'Avg//Receive-Side//Still Waiting')
-                ,max(ServiceTimeMPN) (FORMAT 'ZZ9.99', TITLE 'Max//Time//AWT Held')
-                ,average(zeroifnull(ServiceTimeAPN)) (FORMAT 'ZZ9.99', TITLE 'Avg//Time//AWT Held')
-                ,max(WorkTimeInUseMPN) (FORMAT 'ZZ9.99', TITLE 'Max//Time//AWT Held or Still Held')
-            --	,max(WorkTypeInUseMPN) (FORMAT 'ZZ9.9', TITLE 'Pseudo-Max//AWTs//In Use')
-                ,average(AwtUsedAPN) (FORMAT 'ZZ9.9', TITLE 'Avg//AWTs//In Use')
-            FROM
-            (
-                select
-                    t1.TheDate as TheDatePN
-                    ,extract(hour from t1.thetime) TheHour
-                    ,extract(Minute from t1.thetime) TheMinute
-                    ,CASE WHEN day_of_week = 1 THEN 'Sunday'
-                    WHEN day_of_week = 2 THEN 'Monday'
-                    WHEN day_of_week = 3 THEN 'Tuesday'
-                    WHEN day_of_week = 4 THEN 'Wednesday'
-                    WHEN day_of_week = 5 THEN 'Thursday'
-                    WHEN day_of_week = 6 THEN 'Friday'
-                    WHEN day_of_week = 7 THEN 'Saturday'
-                    END AS dayofweek,
-                    NodeId,
-                    rulename as
-                    rulenamePN,
-                    ppid as ppidPN,
-                    pgid as pgidPN
-            --		average(RelWgt) as RelWgtPN
-                    ,SUM(CPUPct) as CPUPctPN
-                    ,sum((PhysicalReadPerm +
-                    PhysicalWritePerm+PhysicalReadOther+PhysicalWriteOther)/(CentiSecs/100)) as
-                    PhysicalIOPN
-                    ,sum((PhysicalReadPermKB +
-                    PhysicalWritePermKB+PhysicalReadOtherKB+PhysicalWriteOtherKB)/(1024*CentiSecs/100)) as PhysicalIOMBPN
-                    ,sum(WorkMsgSendDelayCnt/AmpCount) as WorkMsgSendDelayCntPN
-                    ,sum(NumRequests/AmpCount) as NumRequestsPN
-                    ,sum(AwtReleases/AmpCount) as AwtReleasesPN
-                    ,sum(WorkMsgReceiveDelayCnt/AmpCount) as QLengthAmpAvgAPN
-            --		,max(WorkMsgReceiveDelayCntMax) as QLengthMaxMPN
-                    ,max(WorkMsgSendDelayMax) as WorkMsgSendDelayMPN
-                    ,max(WorkMsgReceiveDelayMax) as WorkMsgReceiveDelayMPN
-                    ,max(QWaitTimeMax) as QWaitTimeMaxMPN
-                    ,sum(WorkMsgSendDelayRequestAvg) as WorkMsgSendDelayRequestAPN
-                    ,sum(WorkMsgReceiveDelayRequestAvg) as WorkMsgReceiveDelayRequestAPN
-                    ,sum(QWaitTimeRequestAvg) as QWaitTimeRequestAPN
-                    ,sum(ServiceTimeRequestAvg) as ServiceTimeAPN
-                    ,max(ServiceTimeMax) as ServiceTimeMPN
-                    ,max(WorkTimeInUseMax) as WorkTimeInUseMPN
-                    ,sum(AWTUsedAvg/AmpCount) as AwtUsedAPN
-            --		,max(WorkTypeInUseMax/AmpCount) as WorkTypeInUseMPN
-                FROM 
-                    DBC.ResSpsView as T1
-                    LEFT OUTER JOIN
-                    tdwm.RuleDefs as T2
-                    on (T1.WDid = T2.RuleId AND T2.RuleType =5)
-                    inner join
-                    sys_calendar.CALENDAR b
-                    on calendar_date = thedate
-                where thedate = date and active >0 group by 1,2,3,4,5,6,7,8
-            ) as SumPNTbl
-            group by 1,2,3,4,5,6,7,8 order by 1,2,3,4,5,6,7""")
-        return format_text_response(list([row for row in rows.fetchall()]))
-    except Exception as e:
-        logger.error(f"Error showing sessions: {e}")
-        return format_error_response(str(e))
-    
-async def show_tasm_even_history() -> ResponseType:
-    """Show TASM event history"""
-    try:
-        global _tdconn
-        cur = _tdconn.cursor()
-        rows = cur.execute("""
-            SELECT entryts,
-                SUBSTR(entrykind,1,10) "kind",
-                SUBSTR (entryname,1,20) "name",
-                CAST (eventvalue as float format '999.9999') "evt value",
-                CAST (lastvalue as float format '999.9999') "last value",
-                spare2 "spare Int",
-                SUBSTR (activity,1,10) "activity id",
-                SUBSTR (activityname,1,20) "act name", seqno
-            FROM tdwmeventhistory order by entryts, seqno""")
-        return format_text_response(list([row for row in rows.fetchall()]))
-    except Exception as e:
-        logger.error(f"Error showing sessions: {e}")
-        return format_error_response(str(e))
-
-async def show_tasm_rule_history_red() -> ResponseType:
-    """what caused the system to enter the RED state"""
-    try:
-        global _tdconn
-        cur = _tdconn.cursor()
-        rows = cur.execute("""
-            WITH RECURSIVE
-            CausalAnalysis(EntryTS,
-            EntryKind, EntryID, EntryName, Activity,Activityid) AS
-            (
-            SELECT EntryTS, EntryKind, EntryID, EntryName, Activity, Activityid
-            FROM DBC.TDWMEventHistory
-            WHERE EntryKind = 'SYSCON' AND EntryName = 'RED' AND Activity = 'ACTIVE'
-            UNION ALL
-            SELECT Cause.EntryTS,Cause.EntryKind,Cause.EntryID,
-                Cause.EntryName,Cause.Activity,Cause.Activityid
-            FROM CausalAnalysis Condition INNER JOIN DBC.TDWMEventHistory Cause
-            ON Condition.EntryKind = Cause.Activity AND
-                Condition.EntryID = Cause.Activityid)
-            SELECT * FROM CausalAnalysis
-            ORDER BY 1 DESC""")
-        return format_text_response(list([row for row in rows.fetchall()]))
-    except Exception as e:
-        logger.error(f"Error showing sessions: {e}")
-        return format_error_response(str(e))
-    
-async def create_filter_rule() -> ResponseType:
-    """Create filter rule"""
-    try:
-        global _tdconn
-        cur = _tdconn.cursor()
-        rows = cur.execute("")
-        return format_text_response(list([row for row in rows.fetchall()]))
-    except Exception as e: 
-        logger.error(f"Error showing sessions: {e}")
-        return format_error_response(str(e))
-
-async def add_class_criteria() -> ResponseType:
-    """Add classification criteria """
-    try:
-        global _tdconn
-        cur = _tdconn.cursor()
-        rows = cur.execute("")
-        return format_text_response(list([row for row in rows.fetchall()]))
-    except Exception as e: 
-        logger.error(f"Error showing sessions: {e}")
-        return format_error_response(str(e))
-
-async def enable_filter_in_default() -> ResponseType:
-    """Enable the filter in the default state"""
-    try:
-        global _tdconn
-        cur = _tdconn.cursor()
-        rows = cur.execute("")
-        return format_text_response(list([row for row in rows.fetchall()]))
-    except Exception as e: 
-        logger.error(f"Error showing sessions: {e}")
-        return format_error_response(str(e))
-    
-async def enable_filter_rule() -> ResponseType:
-    """Enable the filter rule """
-    try:
-        global _tdconn
-        cur = _tdconn.cursor()
-        rows = cur.execute("")
-        return format_text_response(list([row for row in rows.fetchall()]))
-    except Exception as e: 
-        logger.error(f"Error showing sessions: {e}")
-        return format_error_response(str(e))
-
-async def activate_rulset(RuleName: str) -> ResponseType:
-    """Activate the {RuleName} ruleset with the new filter rule. """
-    try:
-        global _tdconn
-        cur = _tdconn.cursor()
-        rows = cur.execute("")
-        return format_text_response(list([row for row in rows.fetchall()]))
-    except Exception as e: 
-        logger.error(f"Error showing sessions: {e}")
-        return format_error_response(str(e))
-                           
-async def main():
-    logger.info("Starting Teradata Workload Management MCP Server")
-    server = Server("teradata-mcp")
-    logger.info("Registering handlers")
+    # Parse command line arguments for database URL
     parser = argparse.ArgumentParser(description="TDWM MCP Server")
     parser.add_argument("database_url", help="Database connection URL", nargs="?")
     args = parser.parse_args()
     database_url = os.environ.get("DATABASE_URI", args.database_url)
-    parsed_url = urlparse(database_url)
+    
     if not database_url:
-        raise ValueError(
-            "Error: No database URL provided. Please specify via 'DATABASE_URI' environment variable or command-line argument.",
-        )
-        global _tdconn
+        logger.warning("No database URL provided. Database operations will fail.")
+        return
+    
+    # Initialize database connection
+    parsed_url = urlparse(database_url)
+    _db = parsed_url.path.lstrip('/') 
+    
     try:
-        _tdconn = TDConn(database_url)
-        cur = _tdconn.cursor()
-        cur.execute("SET QUERY_BAND = 'App=GenAI' FOR SESSION;")
-        logger.info("Successfully connected to database and initialized connection")
+        # Create connection manager with configurable retry settings
+        max_retries = int(os.environ.get("DB_MAX_RETRIES", "3"))
+        initial_backoff = float(os.environ.get("DB_INITIAL_BACKOFF", "1.0"))
+        max_backoff = float(os.environ.get("DB_MAX_BACKOFF", "30.0"))
+        
+        _connection_manager = TeradataConnectionManager(
+            database_url=database_url,
+            db_name=_db,
+            max_retries=max_retries,
+            initial_backoff=initial_backoff,
+            max_backoff=max_backoff
+        )
+        # Register the connection manager with the tool modules now so they
+        # can attempt to establish a connection lazily (via ensure_connection)
+        # even if the initial connection attempt fails below.
+        set_tools_connection(_connection_manager, _db)
+        set_resource_connection(_connection_manager, _db)
+
+        # Test initial connection (this may still fail; tools will try again on demand)
+        await _connection_manager.ensure_connection()
+        logger.info("Successfully connected to database and initialized connection manager")
+        
     except Exception as e:
         logger.warning(
             f"Could not connect to database: {obfuscate_password(str(e))}",
@@ -679,507 +96,247 @@ async def main():
             "The MCP server will start but database operations will fail until a valid connection is established.",
         )
 
-    logger.info("Registering handlers")
-
-    @server.list_prompts()
-    async def handle_list_prompts() -> list[types.Prompt]:
-        logger.debug("Handling list_prompts request")
-        return []
+async def initialize_oauth():
+    """Initialize OAuth 2.1 authentication from environment variables."""
+    global _oauth_config, _oauth_middleware
     
-    @server.get_prompt()
-    async def handle_get_prompt(name: str, arguments: dict[str, str] | None) -> types.GetPromptResult:
-        """Generate a prompt based on the requested type"""
-        # Simple argument handling
-        if arguments is None:
-            arguments = {}
-        else:
-            raise ValueError(f"Unknown prompt: {name}")
-    
-    @server.list_tools()
-    async def handle_list_tools() -> list[types.Tool]:
-        """
-        List available tools.
-        Each tool specifies its arguments using JSON Schema validation.
-        """
-        logger.info("Listing tools")
-        return [
-            types.Tool(
-                name="show_sessions",
-                description="Show my sessions",
-                inputSchema={
-                    "type": "object",
-                    "properties": {},
-                },
-            ),
-            types.Tool(
-                name="show_physical_resources",
-                description="Monitor system resources",
-                inputSchema={
-                    "type": "object",
-                    "properties": {},
-                },
-            ),
-            types.Tool(
-                name="monitor_amp_load",
-                description="Monitor AMP load",
-                inputSchema={
-                    "type": "object",
-                    "properties": {},
-                },
-            ),
-              types.Tool(
-                name="monitor_awt",
-                description="Monitor AWT (Amp Worker Task) resources",
-                inputSchema={
-                    "type": "object",
-                    "properties": {},
-                },
-            ),
-            types.Tool(
-                name="monitor_config",
-                description="Monitor virtual config",
-                inputSchema={
-                    "type": "object",
-                    "properties": {},
-                },
-            ),
-            types.Tool(
-                name="show_sql_steps_for_session",
-                description="Show SQL steps for a session",
-                inputSchema={
-                    "type": "object",
-                    "properties": {
-                        "sessionNo": {
-                            "type": "integer",
-                            "description": "Session Number",
-                        },
-                    },
-                    "required": ["sessionNo"],
-                },
-            ),
-            types.Tool(
-                name="show_sql_text_for_session",
-                description="Show SQL text for a session",
-                inputSchema={
-                    "type": "object",
-                    "properties": {
-                        "sessionNo": {
-                            "type": "integer",
-                            "description": "Session Number",
-                        },
-                    },
-                    "required": ["sessionNo"],
-                },
-            ),
-            types.Tool(
-                name="identify_blocking",
-                description="Identify blocking users",
-                inputSchema={
-                    "type": "object",
-                    "properties": {},
-                },
-            ),
-            types.Tool(
-                name="list_active_WD",
-                description="List active workloads (WD)",
-                inputSchema={
-                    "type": "object",
-                    "properties": {},
-                },
-            ),
-            types.Tool(
-                name="list_WD",
-                description="List workloads (WD)",
-                inputSchema={
-                    "type": "object",
-                    "properties": {},
-                },
-            ),
-            types.Tool(
-                name="abort_sessions_user",
-                description="Abort sessions for a user",
-                inputSchema={
-                    "type": "object",
-                    "properties": {
-                        "user": {
-                            "type": "string",
-                            "description": "User name to abort",
-                        },
-                    },
-                    "required": ["user"],
-                },
-            ),
-            types.Tool(
-                name="list_delayed_request",
-                description="List all of the delayed queries",
-                inputSchema={
-                    "type": "object",
-                    "properties": {},
-                },
-            ),
-            types.Tool(
-                name="abort_delayed_request",
-                description="abort a delayed request on session {sessionNo}",
-                inputSchema={
-                    "type": "object",
-                    "properties": {
-                        "sessionNo": {
-                            "type": "integer",
-                            "description": "Session Number",
-                        },
-                    },
-                    "required": ["sessionNo"],
-                },
-            ),
-            types.Tool(
-                name="list_utility_stats",
-                description="List statistics for utility use on the system",
-                inputSchema={
-                    "type": "object",
-                    "properties": {},
-                },
-            ),
-            types.Tool(
-                name="display_delay_queue",
-                description="display {type} delay queue",
-                inputSchema={
-                    "type": "object",
-                    "properties": {
-                        "type": {
-                            "type": "string",
-                            "description": "type of delay queue",
-                        },
-                    },
-                    "required": ["sessionNo"],
-                },
-            ),
-            types.Tool(
-                name="release_delay_queue",
-                description="Releases a request or utility session in the queue for session {sessionNo} or user {userName}",
-                inputSchema={
-                    "type": "object",
-                    "properties": {
-                        "sessionNo": {
-                            "type": "integer",
-                            "description": "Session Number",
-                        },
-                        "userName": {
-                            "type": "string",
-                            "description": "User name to release",
-                        },
-                    },
-                    "required": [],
-                },
-            ), 
-            types.Tool(
-                name="show_tdwm_summary",
-                description="Show workloads summary information",
-                inputSchema={
-                    "type": "object",
-                    "properties": {},
-                },
-            ),       
-            types.Tool(
-                name="show_trottle_statistics",
-                description="Show throttle statistics for {type}",
-                inputSchema={
-                    "type": "object",
-                    "properties": {
-                        "type": {
-                            "type": "string",
-                            "description": "Type of throttle statistics",
-                        },
-                    },
-                    "required": [],
-                },
-            ),
-            types.Tool(
-                name="list_query_band",
-                description="List query band for {type}",
-                inputSchema={
-                    "type": "object",
-                    "properties": {
-                        "type": {
-                            "type": "string",
-                            "description": "Type of query band",
-                        },
-                    },
-                    "required": [],
-                },
-            ),   
-            types.Tool(
-                name="monitor_session_query_band",
-                description="Monitor query band for session {sessionNo}",
-                inputSchema={
-                    "type": "object",
-                    "properties": {
-                        "sessionNo": {
-                            "type": "integer",
-                            "description": "Session Number",
-                        },
-                    },
-                    "required": ["sessionNo"],
-                },
-            ),  
-            types.Tool(
-                name="show_query_log",
-                description="Show query log for user {user}",
-                inputSchema={
-                    "type": "object",
-                    "properties": {
-                        "user": {
-                            "type": "string",
-                            "description": "Session Number",
-                        },
-                    },
-                    "required": ["user"],
-                },
-            ), 
-            types.Tool(
-                name="show_cod_limits",
-                description="Show COD (Capacity On Demand) limits",
-                inputSchema={
-                    "type": "object",
-                    "properties": {},
-                },
-            ),
-            types.Tool(
-                name="tdwm_list_clasification",
-                description="List clasification types for workload (TASM) rule",
-                inputSchema={
-                    "type": "object",
-                    "properties": {},
-                },
-            ),
-            types.Tool(
-                name="show_top_users",
-                description="Show {type} users using the most resources",
-                inputSchema={
-                    "type": "object",
-                    "properties": {
-                        "type": {
-                            "type": "string",
-                            "description": "top users",
-                        },
-                    },
-                    "required": [],
-                },
-            ),
-            types.Tool(
-                name="show_sw_event_log",
-                description="Show {Type} event log",
-                inputSchema={
-                    "type": "object",
-                    "properties": {
-                        "Type": {
-                            "type": "string",
-                            "description": "Type of the events",
-                        },
-                    },
-                    "required": [],
-                },
-            ),
-            types.Tool(
-                name="show_tasm_statistics",
-                description="Show TASM statistics",
-                inputSchema={
-                    "type": "object",
-                    "properties": {},
-                },
-            ),
-            types.Tool(
-                name="show_tasm_even_history",
-                description="Show TASM event history",
-                inputSchema={
-                    "type": "object",
-                    "properties": {},
-                },
-            ),
-            types.Tool(
-                name="show_tasm_rule_history_red",
-                description="Show what caused the system to enter the RED state",
-                inputSchema={
-                    "type": "object",
-                    "properties": {},
-                },
-            ),
-            types.Tool(
-                name="create_filter_rule",
-                description="Create filter rule",
-                inputSchema={
-                    "type": "object",
-                    "properties": {},
-                },
-            ),
-            types.Tool(
-                name="add_class_criteria",
-                description="Add classification criteria",
-                inputSchema={
-                    "type": "object",
-                    "properties": {},
-                },
-            ),
-            types.Tool(
-                name="enable_filter_in_default",
-                description="Enable the filter in the default state",
-                inputSchema={
-                    "type": "object",
-                    "properties": {},
-                },
-            ),
-            types.Tool(
-                name="enable_filter_rule",
-                description="Enable the filter rule",
-                inputSchema={
-                    "type": "object",
-                    "properties": {},
-                },
-            ),
-            types.Tool(
-                name="activate_rulset",
-                description="Activate the {RuleName} ruleset with the new filter rule",
-                inputSchema={
-                    "type": "object",
-                    "properties": {
-                        "RuleName": {
-                            "type": "string",
-                            "description": "Name of the ruleset to activate",
-                        },
-                    },
-                    "required": ["RuleName"],
-                },
-            ),
-        ]
-    
-    @server.call_tool()
-    async def handle_tool_call(
-        name: str, arguments: dict | None
-    ) -> list[types.TextContent | types.ImageContent | types.EmbeddedResource]:
-        """
-        Handle tool execution requests.
-        Tools can modify server state and notify clients of changes.
-        """
-        logger.info(f"Calling tool: {name}::{arguments}")
-        try:
-            if name == "show_sessions":
-                tool_response = await list_sessions()
-                return tool_response
-            elif name == "show_physical_resources":
-                tool_response = await list_resources()
-                return tool_response
-            elif name == "monitor_amp_load":
-                tool_response = await monitor_amp_load()
-                return tool_response
-            elif name == "monitor_awt":
-                tool_response = await monitor_awt()
-                return tool_response
-            elif name == "monitor_config":
-                tool_response = await monitor_config()
-                return tool_response
-            elif name == "show_sql_steps_for_session":
-                tool_response = await show_session_sql_steps(arguments["sessionNo"])
-                return tool_response
-            elif name == "show_sql_text_for_session":
-                tool_response = await show_session_sql_text(arguments["sessionNo"])
-                return tool_response
-            elif name == "identify_blocking":
-                tool_response = await identify_blocking()
-                return tool_response
-            elif name == "abort_sessions_user":
-                tool_response = await abort_sessions_user(arguments["user"])
-                return tool_response
-            elif name == "list_active_WD":
-                tool_response = await list_active_WD()
-                return tool_response
-            elif name == "list_WD":
-                tool_response = await list_WDs()
-                return tool_response
-            elif name == "list_delayed_request":
-                tool_response = await list_delayed_request()
-                return tool_response
-            elif name == "abort_delayed_request":
-                tool_response = await abort_delayed_request(arguments["sessionNo"])
-                return tool_response
-            elif name == "list_utility_stats":
-                tool_response = await list_utility_stats()
-                return tool_response
-            elif name == "display_delay_queue":
-                tool_response = await display_delay_queue(arguments["type"])
-                return tool_response
-            elif name == "release_delay_queue":
-                tool_response = await release_delay_queue(arguments["sessionNo"], arguments["userName"])
-                return tool_response
-            elif name == "show_tdwm_summary":
-                tool_response = await show_tdwm_summary()
-                return tool_response
-            elif name == "show_trottle_statistics":
-                tool_response = await show_trottle_statistics(arguments["type"])
-                return tool_response
-            elif name == "list_query_band":
-                tool_response = await list_query_band(arguments["type"])
-                return tool_response
-            elif name == "monitor_session_query_band":
-                tool_response = await monitor_session_query_band(arguments["sessionNo"])
-                return tool_response
-            elif name == "show_query_log":
-                tool_response = await show_query_log(arguments["user"])
-                return tool_response
-            elif name == "show_cod_limits":
-                tool_response = await show_cod_limits()
-                return tool_response
-            elif name == "tdwm_list_clasification":
-                tool_response = await tdwm_list_clasification()
-                return tool_response
-            elif name == "show_top_users":
-                tool_response = await show_top_users(arguments["type"])
-                return tool_response
-            elif name == "show_sw_event_log":
-                tool_response = await show_sw_event_log(arguments["Type"])
-                return tool_response
-            elif name == "show_tasm_statistics":
-                tool_response = await show_tasm_statistics()
-                return tool_response
-            elif name == "show_tasm_even_history":
-                tool_response = await show_tasm_even_history()
-                return tool_response
-            elif name == "show_tasm_rule_history_red":
-                tool_response = await show_tasm_rule_history_red()
-                return tool_response
-            elif name == "create_filter_rule":
-                tool_response = await create_filter_rule()
-                return tool_response
-            elif name == "add_class_criteria":
-                tool_response = await add_class_criteria()
-                return tool_response
-            elif name == "enable_filter_in_default":
-                tool_response = await enable_filter_in_default()
-                return tool_response
-            elif name == "enable_filter_rule":
-                tool_response = await enable_filter_rule()
-                return tool_response
-            elif name == "activate_rulset":
-                tool_response = await activate_rulset(arguments["RuleName"])
-                return tool_response
-            return [types.TextContent(type="text", text=f"Unsupported tool: {name}")]
-
-        except Exception as e:
-            logger.error(f"Error executing tool {name}: {e}")
-            raise ValueError(f"Error executing tool {name}: {str(e)}")
+    try:
+        # Load OAuth configuration from environment
+        _oauth_config = OAuthConfig.from_environment()
         
-    async with stdio_server() as (read_stream, write_stream):
-        logger.info("Server running with stdio transport")
-        await server.run(
-            read_stream,
-            write_stream,
-            InitializationOptions(
-                server_name="tdwm-mcp",
-                server_version="0.1.0",
-                capabilities=server.get_capabilities(
-                    notification_options=NotificationOptions(),
-                    experimental_capabilities={},
-                ),
-            ),
+        if _oauth_config.enabled:
+            # Initialize OAuth components
+            metadata = ProtectedResourceMetadata(_oauth_config)
+            _oauth_middleware = OAuthMiddleware(_oauth_config, metadata)
+            
+            # Set up OAuth context for tools
+            oauth_context = OAuthContext(_oauth_config, metadata)
+            set_oauth_context(oauth_context)
+            
+            logger.info(f"OAuth 2.1 authentication enabled for realm: {_oauth_config.realm}")
+            logger.info(f"Authorization server: {_oauth_config.get_issuer_url()}")
+            logger.info(f"Required scopes: {_oauth_config.required_scopes}")
+        else:
+            logger.info("OAuth 2.1 authentication is disabled")
+            # Set up empty OAuth context
+            set_oauth_context(None)
+            
+    except Exception as e:
+        logger.warning(f"OAuth initialization failed: {e}")
+        logger.warning("Server will start without OAuth authentication")
+        _oauth_config = OAuthConfig(enabled=False)
+        _oauth_middleware = None
+        set_oauth_context(None)
+
+# Create FastMCP app
+app = FastMCP("tdwm-mcp")
+
+# Set up the handlers using the internal MCP server for dynamic resources and tools
+app._mcp_server.list_tools()(handle_list_tools)
+app._mcp_server.call_tool(validate_input=False)(handle_tool_call)
+app._mcp_server.list_resources()(handle_list_resources)
+app._mcp_server.read_resource()(handle_read_resource)
+app._mcp_server.list_prompts()(handle_list_prompts)
+app._mcp_server.get_prompt()(handle_get_prompt)
+
+def setup_oauth_endpoints():
+    """Setup OAuth endpoints for FastMCP app."""
+    global _oauth_config, _oauth_middleware
+    
+    if _oauth_config and _oauth_config.enabled and _oauth_middleware:
+        metadata = ProtectedResourceMetadata(_oauth_config)
+        oauth_endpoints = OAuthEndpoints(_oauth_config, metadata, _oauth_middleware)
+        
+        # Register OAuth endpoints with the FastAPI app for streamable-http transport
+        # Note: For SSE transport, OAuth endpoints are handled in create_starlette_app()
+        if hasattr(app, '_app') and hasattr(app._app, 'routes'):
+            oauth_endpoints.register_endpoints(app._app)
+            logger.info("OAuth endpoints registered with FastAPI app (streamable-http transport)")
+        else:
+            logger.warning("Could not register OAuth endpoints with FastAPI app")
+    else:
+        logger.info("OAuth endpoints not registered - OAuth is disabled")
+
+def create_starlette_app(mcp_server: Server, *, debug: bool = False) -> Starlette:
+    """Create a Starlette application that can serve the provided mcp server with SSE."""
+    from starlette.responses import JSONResponse
+    
+    sse = SseServerTransport("/messages/")
+
+    async def handle_sse(request: Request) -> None:
+        async with sse.connect_sse(
+                request.scope,
+                request.receive,
+                request._send, 
+        ) as (read_stream, write_stream):
+            await mcp_server.run(
+                read_stream,
+                write_stream,
+                mcp_server.create_initialization_options(),
+            )
+
+    # Create base routes for SSE
+    routes = [
+        Route("/sse", endpoint=handle_sse),
+        Mount("/messages/", app=sse.handle_post_message),
+    ]
+    
+    async def health_check(request: Request):
+        """Health check endpoint for SSE transport."""
+        try:
+            health_status = {
+                "status": "healthy",
+                "transport": "sse",
+                "oauth": {
+                    "enabled": _oauth_config.enabled if _oauth_config else False,
+                    "configured": bool(_oauth_config and _oauth_config.enabled and _oauth_config.keycloak_url and _oauth_config.realm)
+                },
+                "database": {
+                    "status": "connected" if _connection_manager else "disconnected"
+                }
+            }
+            return JSONResponse(content=health_status)
+        except Exception as e:
+            logger.error(f"Health check error: {e}")
+            return JSONResponse(status_code=503, content={"status": "unhealthy", "error": str(e)})
+
+    async def mcp_server_info(request: Request):
+        """MCP Server Information endpoint for SSE transport."""
+        try:
+            info = {
+                "name": "tdwm-mcp",
+                "version": "0.1.0", 
+                "description": "Teradata Workload Management MCP Server",
+                "transport": "sse",
+                "capabilities": {
+                    "tools": True,
+                    "resources": True,
+                    "prompts": True,
+                    "dynamic_resources": True
+                },
+                "authentication": {
+                    "oauth2": {
+                        "enabled": _oauth_config.enabled if _oauth_config else False,
+                        "authorization_server": _oauth_config.get_issuer_url() if (_oauth_config and _oauth_config.enabled) else None,
+                        "flows_supported": ["authorization_code", "client_credentials"] if (_oauth_config and _oauth_config.enabled) else [],
+                        "scopes_supported": [
+                            "tdwm:read", "tdwm:write", "tdwm:admin",
+                            "tdwm:query", "tdwm:monitor", "tdwm:workload"
+                        ] if (_oauth_config and _oauth_config.enabled) else [],
+                        "protected_resource_metadata": "/.well-known/oauth-protected-resource" if (_oauth_config and _oauth_config.enabled) else None
+                    }
+                },
+                "endpoints": {
+                    "sse": "/sse",
+                    "messages": "/messages/",
+                    "health": "/health",
+                    "protected_resource_metadata": "/.well-known/oauth-protected-resource" if (_oauth_config and _oauth_config.enabled) else None
+                }
+            }
+            return JSONResponse(content=info)
+        except Exception as e:
+            logger.error(f"Error generating MCP server info: {e}")
+            return JSONResponse(status_code=500, content={"error": "Internal server error"})
+
+    async def oauth_endpoints_preflight(request: Request):
+        """Handle CORS preflight requests for OAuth endpoints."""
+        return JSONResponse(
+            content={},
+            headers={
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Methods": "GET, OPTIONS",
+                "Access-Control-Allow-Headers": "Authorization, Content-Type",
+                "Access-Control-Max-Age": "3600"
+            }
         )
 
+    # Add OAuth endpoints if OAuth is enabled
+    if _oauth_config and _oauth_config.enabled and _oauth_middleware:
+        # Create metadata handler for OAuth endpoints
+        metadata = ProtectedResourceMetadata(_oauth_config)
+        
+        async def oauth_protected_resource_metadata(request: Request):
+            """OAuth Protected Resource Metadata endpoint for SSE transport."""
+            try:
+                metadata_dict = metadata.get_metadata()
+                return JSONResponse(
+                    content=metadata_dict,
+                    headers={
+                        "Content-Type": "application/json",
+                        "Cache-Control": "max-age=3600",
+                        "Access-Control-Allow-Origin": "*",
+                        "Access-Control-Allow-Methods": "GET",
+                        "Access-Control-Allow-Headers": "Authorization"
+                    }
+                )
+            except Exception as e:
+                logger.error(f"Error generating protected resource metadata: {e}")
+                return JSONResponse(
+                    status_code=500,
+                    content={"error": "Internal server error"}
+                )
+        
+        # Add OAuth routes to Starlette
+        routes.extend([
+            Route("/.well-known/oauth-protected-resource", endpoint=oauth_protected_resource_metadata, methods=["GET"]),
+            Route("/.well-known/mcp-server-info", endpoint=mcp_server_info, methods=["GET"]),
+            Route("/health", endpoint=health_check, methods=["GET"]),
+            # CORS preflight routes
+            Route("/.well-known/oauth-protected-resource", endpoint=oauth_endpoints_preflight, methods=["OPTIONS"]),
+            Route("/.well-known/mcp-server-info", endpoint=oauth_endpoints_preflight, methods=["OPTIONS"]),
+            Route("/health", endpoint=oauth_endpoints_preflight, methods=["OPTIONS"]),
+        ])
+        
+        logger.info("OAuth endpoints added to SSE Starlette app")
+
+    else:
+        routes.extend([
+            Route("/health", endpoint=health_check, methods=["GET"]),
+            Route("/.well-known/mcp-server-info", endpoint=mcp_server_info, methods=["GET"]),
+        ])
+
+    return Starlette(
+        debug=debug,
+        routes=routes,
+    )
+
+async def main():
+    """Main entry point for the server."""
+    # Configure logging
+    logging.basicConfig(level=logging.INFO)
+    
+    # Initialize OAuth authentication
+    await initialize_oauth()
+    
+    # Initialize database connection
+    await initialize_database()
+    
+    # Setup OAuth endpoints after initialization
+    setup_oauth_endpoints()
+    
+    mcp_transport = os.getenv("MCP_TRANSPORT", "stdio").lower()
+    logger.info(f"MCP_TRANSPORT: {mcp_transport}")
+
+    # Start the MCP server
+    if mcp_transport == "sse":
+        app.settings.host = os.getenv("MCP_HOST", "0.0.0.0")
+        app.settings.port = int(os.getenv("MCP_PORT", "8000"))
+        logger.info(f"Starting MCP server on {app.settings.host}:{app.settings.port}")
+        mcp_server = app._mcp_server  
+        starlette_app = create_starlette_app(mcp_server, debug=True)
+        config = uvicorn.Config(starlette_app, host=app.settings.host, port=app.settings.port, log_level="info")
+        server = uvicorn.Server(config)
+        await server.serve()
+
+    elif mcp_transport == "streamable-http":
+        app.settings.host = os.getenv("MCP_HOST", "0.0.0.0")
+        app.settings.port = int(os.getenv("MCP_PORT", "8000"))
+        app.settings.streamable_http_path = os.getenv("MCP_PATH", "/mcp/")
+        logger.info(f"Starting MCP server on {app.settings.host}:{app.settings.port} with path {app.settings.streamable_http_path}")
+        await app.run_streamable_http_async()
+    else:
+        logger.info("Starting MCP server on stdin/stdout")
+        await app.run_stdio_async()
+
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

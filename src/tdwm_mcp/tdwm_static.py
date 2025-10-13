@@ -55,8 +55,4 @@ def get_tdwm_key_by_label(label: str):
             return entry[1]
     return None
 
-def list_tdwm_classification_types():
-    """
-    List all classification types with their labels and categories.
-    """
-    return [(entry[1], entry[2], entry[3]) for entry in TDWM_CLASIFICATION_TYPE]
+  
