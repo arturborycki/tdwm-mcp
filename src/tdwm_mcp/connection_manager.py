@@ -42,10 +42,12 @@ class TeradataConnectionManager:
         logger.info(f"Creating new database connection to {obfuscate_password(self.database_url)}")
         
         connection = TDConn(self.database_url)
-        
-        # Set query band to identify MCP queries
-        #cur = connection.cursor()
-        #cur.execute("SET QUERY_BAND = 'App=TDWM_MCP' FOR SESSION;")
+        query_band_string = "ApplicationName=TDWM_MCP;"
+
+        set_query_band_sql = f"SET QUERY_BAND = '{query_band_string}' FOR SESSION;"
+
+        cur = connection.cursor()
+        cur.execute(set_query_band_sql)
         
         logger.info("Successfully created database connection")
         return connection
