@@ -23,7 +23,6 @@ from .fnc_tools import (
     handle_tool_call
 )
 from .fnc_resources import (
-    set_resource_connection,
     handle_list_resources,
     handle_read_resource
 )
@@ -82,7 +81,6 @@ async def initialize_database():
         # can attempt to establish a connection lazily (via ensure_connection)
         # even if the initial connection attempt fails below.
         set_tools_connection(_connection_manager, _db)
-        set_resource_connection(_connection_manager, _db)
 
         # Test initial connection (this may still fail; tools will try again on demand)
         await _connection_manager.ensure_connection()

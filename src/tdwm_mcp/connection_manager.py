@@ -44,7 +44,7 @@ class TeradataConnectionManager:
         connection = TDConn(self.database_url)
         query_band_string = "ApplicationName=TDWM_MCP;"
 
-        set_query_band_sql = f"SET QUERY_BAND = '{query_band_string}' FOR SESSION;"
+        set_query_band_sql = f"SET QUERY_BAND = '{query_band_string}' UPDATE FOR SESSION;"
 
         cur = connection.cursor()
         cur.execute(set_query_band_sql)
