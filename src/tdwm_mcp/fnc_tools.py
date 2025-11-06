@@ -11,78 +11,44 @@ from typing import Any, List
 import mcp.types as types
 from .tdwm_static import TDWM_CLASIFICATION_TYPE
 from .oauth_context import require_oauth_authorization, get_oauth_error
-import os
-from urllib.parse import urlparse
-from .connection_manager import TeradataConnectionManager
+
+# Import shared utilities from common module
+from .fnc_common import (
+    format_text_response,
+    format_error_response,
+    get_connection,
+    ResponseType,
+    set_tools_connection,
+    with_connection_retry
+)
+
+# Import Priority 1 Configuration Management tools
+from .fnc_tools_priority1 import (
+    create_system_throttle,
+    modify_throttle_limit,
+    delete_throttle,
+    enable_throttle,
+    disable_throttle,
+    create_filter,
+    delete_filter,
+    enable_filter,
+    disable_filter,
+    add_classification_to_rule,
+    add_subcriteria_to_target,
+    activate_ruleset,
+    list_rulesets
+)
 
 logger = logging.getLogger(__name__)
-ResponseType = List[types.TextContent | types.ImageContent | types.EmbeddedResource]
-
-# Global connection and database variables
-_connection_manager = None
-_db = ""
-
-
-def set_tools_connection(connection_manager, db: str):
-    """Set the global database connection manager and database name."""
-    global _connection_manager, _db
-    _connection_manager = connection_manager
-    _db = db
-
-
-# If the server was started without running `initialize_database()` (for
-# example when running tools in a subprocess or during quick tests), try to
-# construct a connection manager from the `DATABASE_URI` environment variable
-# so the tools don't immediately raise "Database connection not initialized".
-if not _connection_manager:
-    database_url = os.environ.get("DATABASE_URI")
-    if database_url:
-        try:
-            parsed_url = urlparse(database_url)
-            _db = parsed_url.path.lstrip('/')
-            # Create manager instance; actual network connection will be
-            # established lazily when `ensure_connection()` is called.
-            _connection_manager = TeradataConnectionManager(
-                database_url=database_url,
-                db_name=_db
-            )
-            logger.info("TeradataConnectionManager created from DATABASE_URI environment variable")
-        except Exception:
-            # If parsing fails, leave _connection_manager as None and let
-            # callers report the original error.
-            _connection_manager = None
-
-
-def format_text_response(text: Any) -> ResponseType:
-    """Format a text response."""
-    return [types.TextContent(type="text", text=str(text))]
-
-
-def format_error_response(error: str) -> ResponseType:
-    """Format an error response."""
-    return format_text_response(f"Error: {error}")
-
-
-async def get_connection():
-    """Get a healthy database connection."""
-    global _connection_manager
-    
-    if not _connection_manager:
-        raise ConnectionError("Database connection not initialized")
-    
-    return await _connection_manager.ensure_connection()
 
 
 # --- TDWM Tool Functions ---
 
+@with_connection_retry()
 async def list_sessions() -> ResponseType:
     """Show my sessions"""
     try:
-        global _connection_manager
-        if not _connection_manager:
-            return format_error_response("Database connection not initialized")
-        
-        tdconn = await _connection_manager.ensure_connection()
+        tdconn = await get_connection()
         cur = tdconn.cursor()
         rows = cur.execute("SELECT * FROM TABLE (monitormysessions()) as t1")
         return format_text_response(list([row for row in rows.fetchall()]))
@@ -90,14 +56,11 @@ async def list_sessions() -> ResponseType:
         logger.error(f"Error showing sessions: {e}")
         return format_error_response(str(e))
 
+@with_connection_retry()
 async def monitor_amp_load() -> ResponseType:
     """Monitor AMP load"""
     try:
-        global _connection_manager
-        if not _connection_manager:
-            return format_error_response("Database connection not initialized")
-        
-        tdconn = await _connection_manager.ensure_connection()
+        tdconn = await get_connection()
         cur = tdconn.cursor()
         rows = cur.execute("SELECT * FROM TABLE (MonitorAMPLoad()) AS t1")
         return format_text_response(list([row for row in rows.fetchall()]))
@@ -105,14 +68,11 @@ async def monitor_amp_load() -> ResponseType:
         logger.error(f"Error showing AMPs: {e}")
         return format_error_response(str(e))
 
+@with_connection_retry()
 async def monitor_awt() -> ResponseType:
     """Monitor AWT (Amp Worker Tasks) resources """
     try:
-        global _connection_manager
-        if not _connection_manager:
-            return format_error_response("Database connection not initialized")
-        
-        tdconn = await _connection_manager.ensure_connection()
+        tdconn = await get_connection()
         cur = tdconn.cursor()
         rows = cur.execute("SELECT * FROM TABLE (MonitorAWTResource(1,2,3,4)) AS t1")
         return format_text_response(list([row for row in rows.fetchall()]))
@@ -120,14 +80,11 @@ async def monitor_awt() -> ResponseType:
         logger.error(f"Error showing AMPs: {e}")
         return format_error_response(str(e))
 
+@with_connection_retry()
 async def monitor_config() -> ResponseType:
     """Monitor Teradata config """
     try:
-        global _connection_manager
-        if not _connection_manager:
-            return format_error_response("Database connection not initialized")
-        
-        tdconn = await _connection_manager.ensure_connection()
+        tdconn = await get_connection()
         cur = tdconn.cursor()
         rows = cur.execute("SELECT t2.* FROM TABLE (MonitorVirtualConfig()) AS t2")
         return format_text_response(list([row for row in rows.fetchall()]))
@@ -135,14 +92,11 @@ async def monitor_config() -> ResponseType:
         logger.error(f"Error showing AMPs: {e}")
         return format_error_response(str(e))
 
+@with_connection_retry()
 async def list_resources() -> ResponseType:
     """Show physical resources"""
     try:
-        global _connection_manager
-        if not _connection_manager:
-            return format_error_response("Database connection not initialized")
-        
-        tdconn = await _connection_manager.ensure_connection()
+        tdconn = await get_connection()
         cur = tdconn.cursor()
         rows = cur.execute("SELECT t2.* from table (MonitorPhysicalResource()) as t2")
         return format_text_response(list([row for row in rows.fetchall()]))
@@ -150,14 +104,11 @@ async def list_resources() -> ResponseType:
         logger.error(f"Error showing sessions: {e}")
         return format_error_response(str(e))
 
+@with_connection_retry()
 async def identify_blocking() -> ResponseType:
     """Identify blocking users"""
     try:
-        global _connection_manager
-        if not _connection_manager:
-            return format_error_response("Database connection not initialized")
-        
-        tdconn = await _connection_manager.ensure_connection()
+        tdconn = await get_connection()
         cur = tdconn.cursor()
         rows = cur.execute("""
             SELECT 
@@ -171,14 +122,11 @@ async def identify_blocking() -> ResponseType:
         logger.error(f"Error showing sessions: {e}")
         return format_error_response(str(e))
 
+@with_connection_retry()
 async def abort_sessions_user(usr: str) -> ResponseType:
     """Abort sessions for a user {usr}"""
     try:
-        global _connection_manager
-        if not _connection_manager:
-            return format_error_response("Database connection not initialized")
-        
-        tdconn = await _connection_manager.ensure_connection()
+        tdconn = await get_connection()
         cur = tdconn.cursor()
         rows = cur.execute("""
             SELECT AbortSessions (HostId, UserName, SessionNo, 'Y', 'Y')
@@ -189,14 +137,11 @@ async def abort_sessions_user(usr: str) -> ResponseType:
         logger.error(f"Error showing sessions: {e}")
         return format_error_response(str(e))
 
+@with_connection_retry()
 async def list_active_WD() -> ResponseType:
     """List active workloads (WD)"""
     try:
-        global _connection_manager
-        if not _connection_manager:
-            return format_error_response("Database connection not initialized")
-        
-        tdconn = await _connection_manager.ensure_connection()
+        tdconn = await get_connection()
         cur = tdconn.cursor()
         rows = cur.execute("""sel * from table (tdwm.TDWMActiveWDs()) as t1""")
         return format_text_response(list([row for row in rows.fetchall()]))
@@ -204,14 +149,11 @@ async def list_active_WD() -> ResponseType:
         logger.error(f"Error showing sessions: {e}")
         return format_error_response(str(e))
 
+@with_connection_retry()
 async def list_WDs() -> ResponseType:
     """List workloads (WD)"""
     try:
-        global _connection_manager
-        if not _connection_manager:
-            return format_error_response("Database connection not initialized")
-        
-        tdconn = await _connection_manager.ensure_connection()
+        tdconn = await get_connection()
         cur = tdconn.cursor()
         rows = cur.execute("""SELECT * FROM TABLE (TDWM.TDWMListWDs('Y')) AS t1""")
         return format_text_response(list([row for row in rows.fetchall()]))
@@ -220,14 +162,11 @@ async def list_WDs() -> ResponseType:
         return format_error_response(str(e))
 
 
+@with_connection_retry()
 async def show_session_sql_steps(SessionNo: int) -> ResponseType:
     """Show sql steps for a session {SessionNo}"""
     try:
-        global _connection_manager
-        if not _connection_manager:
-            return format_error_response("Database connection not initialized")
-        
-        tdconn = await _connection_manager.ensure_connection()
+        tdconn = await get_connection()
         cur = tdconn.cursor()
         rows = cur.execute("SELECT HostId, LogonPENo FROM TABLE (monitormysessions()) as t1 where SessionNo = ?", [SessionNo])
         row = rows.fetchall()[0]
@@ -256,14 +195,11 @@ async def show_session_sql_steps(SessionNo: int) -> ResponseType:
         logger.error(f"Error showing sessions: {e}")
         return format_error_response(str(e))
 
+@with_connection_retry()
 async def monitor_session_query_band(SessionNo: int) -> ResponseType:
     """Monitor query band for session {SessionNo}"""
     try:
-        global _connection_manager
-        if not _connection_manager:
-            return format_error_response("Database connection not initialized")
-        
-        tdconn = await _connection_manager.ensure_connection()
+        tdconn = await get_connection()
         cur = tdconn.cursor()
         rows = cur.execute("SELECT HostId, LogonPENo FROM TABLE (monitormysessions()) as t1 where SessionNo = ?", [SessionNo])
         row = rows.fetchall()[0]
@@ -279,14 +215,11 @@ async def monitor_session_query_band(SessionNo: int) -> ResponseType:
         logger.error(f"Error showing sessions: {e}")
         return format_error_response(str(e))
 
+@with_connection_retry()
 async def show_session_sql_text(SessionNo: int) -> ResponseType:
     """Show sql text for a session {SessionNo}"""
     try:
-        global _connection_manager
-        if not _connection_manager:
-            return format_error_response("Database connection not initialized")
-        
-        tdconn = await _connection_manager.ensure_connection()
+        tdconn = await get_connection()
         cur = tdconn.cursor()
         rows = cur.execute("SELECT HostId, LogonPENo FROM TABLE (monitormysessions()) as t1 where SessionNo = ?", [SessionNo])
         row = rows.fetchall()[0]
@@ -300,14 +233,11 @@ async def show_session_sql_text(SessionNo: int) -> ResponseType:
         logger.error(f"Error showing sessions: {e}")
         return format_error_response(str(e))
 
+@with_connection_retry()
 async def list_delayed_request() -> ResponseType:
     """List all of the delayed queries"""
     try:
-        global _connection_manager
-        if not _connection_manager:
-            return format_error_response("Database connection not initialized")
-        
-        tdconn = await _connection_manager.ensure_connection()
+        tdconn = await get_connection()
         cur = tdconn.cursor()
         rows = cur.execute("""
             SELECT * FROM TABLE (TDWM.TDWMGetDelayedQueries('O')) AS t1""")
@@ -317,14 +247,11 @@ async def list_delayed_request() -> ResponseType:
         return format_error_response(str(e))
 
 
+@with_connection_retry()
 async def abort_delayed_request(SessionNo: int) -> ResponseType:
     """Abort delay requests on session {SessionNo}"""
     try:
-        global _connection_manager
-        if not _connection_manager:
-            return format_error_response("Database connection not initialized")
-        
-        tdconn = await _connection_manager.ensure_connection()
+        tdconn = await get_connection()
         cur = tdconn.cursor()
         rows = cur.execute("""
             SELECT TDWM.TDWMAbortDelayedRequest(HostId, SessionNo, RequestNo, 0)
@@ -335,14 +262,11 @@ async def abort_delayed_request(SessionNo: int) -> ResponseType:
         logger.error(f"Error showing sessions: {e}")
         return format_error_response(str(e))
 
+@with_connection_retry()
 async def list_utility_stats() -> ResponseType:
     """List statistics for use utilitites"""
     try:
-        global _connection_manager
-        if not _connection_manager:
-            return format_error_response("Database connection not initialized")
-        
-        tdconn = await _connection_manager.ensure_connection()
+        tdconn = await get_connection()
         cur = tdconn.cursor()
         rows = cur.execute("""
             SELECT * FROM TABLE (TDWM.TDWMLoadUtilStatistics()) AS t1""")
@@ -351,14 +275,11 @@ async def list_utility_stats() -> ResponseType:
         logger.error(f"Error showing sessions: {e}")
         return format_error_response(str(e))
 
+@with_connection_retry()
 async def display_delay_queue(Type: str) -> ResponseType:
     """Display {Type} delay queue details"""
     try:
-        global _connection_manager
-        if not _connection_manager:
-            return format_error_response("Database connection not initialized")
-        
-        tdconn = await _connection_manager.ensure_connection()
+        tdconn = await get_connection()
         cur = tdconn.cursor()
         if Type.upper == "WORKLOAD":
             rows = cur.execute("""
@@ -377,14 +298,11 @@ async def display_delay_queue(Type: str) -> ResponseType:
         logger.error(f"Error showing sessions: {e}")
         return format_error_response(str(e))
 
+@with_connection_retry()
 async def release_delay_queue(SessionNo: int, UserName: str) -> ResponseType:
     """Releases a request or utility session in the queue for session or user"""
     try:
-        global _connection_manager
-        if not _connection_manager:
-            return format_error_response("Database connection not initialized")
-        
-        tdconn = await _connection_manager.ensure_connection()
+        tdconn = await get_connection()
         cur = tdconn.cursor()
         if SessionNo:
             rows = cur.execute("""
@@ -401,14 +319,11 @@ async def release_delay_queue(SessionNo: int, UserName: str) -> ResponseType:
         logger.error(f"Error showing sessions: {e}")
         return format_error_response(str(e))
 
+@with_connection_retry()
 async def show_tdwm_summary() -> ResponseType:
     """Show workloads summary information"""
     try:
-        global _connection_manager
-        if not _connection_manager:
-            return format_error_response("Database connection not initialized")
-        
-        tdconn = await _connection_manager.ensure_connection()
+        tdconn = await get_connection()
         cur = tdconn.cursor()
         rows = cur.execute("""SELECT * FROM TABLE (TDWM.TDWMSummary()) AS t2""")
         return format_text_response(list([row for row in rows.fetchall()]))
@@ -416,14 +331,11 @@ async def show_tdwm_summary() -> ResponseType:
         logger.error(f"Error showing sessions: {e}")
         return format_error_response(str(e))
     
+@with_connection_retry()
 async def show_trottle_statistics(type: str) -> ResponseType:
     """Show throttle statistics for {type}"""
     try:
-        global _connection_manager
-        if not _connection_manager:
-            return format_error_response("Database connection not initialized")
-        
-        tdconn = await _connection_manager.ensure_connection()
+        tdconn = await get_connection()
         cur = tdconn.cursor()
         if type.upper() == "ALL":
             rows = cur.execute("""SELECT * FROM TABLE (TDWM.TDWMTHROTTLESTATISTICS('A')) AS t1""")
@@ -445,14 +357,11 @@ async def show_trottle_statistics(type: str) -> ResponseType:
         logger.error(f"Error showing sessions: {e}")
         return format_error_response(str(e))
     
+@with_connection_retry()
 async def list_query_band(Type: str) -> ResponseType:
     """List query band for {Type}"""
     try:
-        global _connection_manager
-        if not _connection_manager:
-            return format_error_response("Database connection not initialized")
-        
-        tdconn = await _connection_manager.ensure_connection()
+        tdconn = await get_connection()
         cur = tdconn.cursor()
         if Type.upper == "TRANSACTION":
             rows = cur.execute("""
@@ -471,14 +380,11 @@ async def list_query_band(Type: str) -> ResponseType:
         logger.error(f"Error showing sessions: {e}")
         return format_error_response(str(e))
 
+@with_connection_retry()
 async def show_query_log(User: str) -> ResponseType:
     """Show query log for user {User}"""
     try:
-        global _connection_manager
-        if not _connection_manager:
-            return format_error_response("Database connection not initialized")
-        
-        tdconn = await _connection_manager.ensure_connection()
+        tdconn = await get_connection()
         cur = tdconn.cursor()
         rows = cur.execute("""
                 sel * from dbc.qrylogv where upper(username)=upper(?) and trunc(collectTimeStamp) = trunc(date) ORDER BY queryid""", [User])
@@ -487,14 +393,11 @@ async def show_query_log(User: str) -> ResponseType:
         logger.error(f"Error showing sessions: {e}")
         return format_error_response(str(e))
 
+@with_connection_retry()
 async def show_cod_limits() -> ResponseType:
     """Show COD (Capacity On Demand) limits"""
     try:
-        global _connection_manager
-        if not _connection_manager:
-            return format_error_response("Database connection not initialized")
-        
-        tdconn = await _connection_manager.ensure_connection()
+        tdconn = await get_connection()
         cur = tdconn.cursor()
         rows = cur.execute("""
                 SELECT * FROM TABLE (TD_SYSFNLIB.TD_get_COD_Limits( ) ) As d""")
@@ -503,18 +406,16 @@ async def show_cod_limits() -> ResponseType:
         logger.error(f"Error showing sessions: {e}")
         return format_error_response(str(e))
     
+@with_connection_retry()
 async def tdwm_list_clasification() -> ResponseType:
     """List clasification types for workload (TASM) rule"""
     return format_text_response(list([(entry[1], entry[2], entry[3], entry[4]) for entry in TDWM_CLASIFICATION_TYPE]))
 
+@with_connection_retry()
 async def show_top_users(type: str) -> ResponseType:
     """Show {type} users using resources"""
     try:
-        global _connection_manager
-        if not _connection_manager:
-            return format_error_response("Database connection not initialized")
-        
-        tdconn = await _connection_manager.ensure_connection()
+        tdconn = await get_connection()
         cur = tdconn.cursor()
         if type.upper() == "TOP":
             query = """
@@ -530,14 +431,11 @@ async def show_top_users(type: str) -> ResponseType:
         logger.error(f"Error showing sessions: {e}")
         return format_error_response(str(e))
 
+@with_connection_retry()
 async def show_sw_event_log(type: str) -> ResponseType:
     """Show {type} event log """
     try:
-        global _connection_manager
-        if not _connection_manager:
-            return format_error_response("Database connection not initialized")
-        
-        tdconn = await _connection_manager.ensure_connection()
+        tdconn = await get_connection()
         cur = tdconn.cursor()
         if type.upper() == "OPERATIONAL":
             query = """SELECT top 20
@@ -591,14 +489,11 @@ async def show_sw_event_log(type: str) -> ResponseType:
         logger.error(f"Error showing sessions: {e}")
         return format_error_response(str(e))
 
+@with_connection_retry()
 async def show_tasm_statistics() -> ResponseType:
     """Show TASM statistics"""
     try:
-        global _connection_manager
-        if not _connection_manager:
-            return format_error_response("Database connection not initialized")
-        
-        tdconn = await _connection_manager.ensure_connection()
+        tdconn = await get_connection()
         cur = tdconn.cursor()
         rows = cur.execute("""
             select
@@ -688,14 +583,11 @@ async def show_tasm_statistics() -> ResponseType:
         logger.error(f"Error showing sessions: {e}")
         return format_error_response(str(e))
     
+@with_connection_retry()
 async def show_tasm_even_history() -> ResponseType:
     """Show TASM event history"""
     try:
-        global _connection_manager
-        if not _connection_manager:
-            return format_error_response("Database connection not initialized")
-        
-        tdconn = await _connection_manager.ensure_connection()
+        tdconn = await get_connection()
         cur = tdconn.cursor()
         rows = cur.execute("""
             SELECT entryts,
@@ -712,14 +604,11 @@ async def show_tasm_even_history() -> ResponseType:
         logger.error(f"Error showing sessions: {e}")
         return format_error_response(str(e))
 
+@with_connection_retry()
 async def show_tasm_rule_history_red() -> ResponseType:
     """what caused the system to enter the RED state"""
     try:
-        global _connection_manager
-        if not _connection_manager:
-            return format_error_response("Database connection not initialized")
-        
-        tdconn = await _connection_manager.ensure_connection()
+        tdconn = await get_connection()
         cur = tdconn.cursor()
         rows = cur.execute("""
             WITH RECURSIVE
@@ -742,14 +631,11 @@ async def show_tasm_rule_history_red() -> ResponseType:
         logger.error(f"Error showing sessions: {e}")
         return format_error_response(str(e))
     
+@with_connection_retry()
 async def create_filter_rule() -> ResponseType:
     """Create filter rule"""
     try:
-        global _connection_manager
-        if not _connection_manager:
-            return format_error_response("Database connection not initialized")
-        
-        tdconn = await _connection_manager.ensure_connection()
+        tdconn = await get_connection()
         cur = tdconn.cursor()
         rows = cur.execute("")
         return format_text_response(list([row for row in rows.fetchall()]))
@@ -757,14 +643,11 @@ async def create_filter_rule() -> ResponseType:
         logger.error(f"Error showing sessions: {e}")
         return format_error_response(str(e))
 
+@with_connection_retry()
 async def add_class_criteria() -> ResponseType:
     """Add classification criteria """
     try:
-        global _connection_manager
-        if not _connection_manager:
-            return format_error_response("Database connection not initialized")
-        
-        tdconn = await _connection_manager.ensure_connection()
+        tdconn = await get_connection()
         cur = tdconn.cursor()
         rows = cur.execute("")
         return format_text_response(list([row for row in rows.fetchall()]))
@@ -772,14 +655,11 @@ async def add_class_criteria() -> ResponseType:
         logger.error(f"Error showing sessions: {e}")
         return format_error_response(str(e))
 
+@with_connection_retry()
 async def enable_filter_in_default() -> ResponseType:
     """Enable the filter in the default state"""
     try:
-        global _connection_manager
-        if not _connection_manager:
-            return format_error_response("Database connection not initialized")
-        
-        tdconn = await _connection_manager.ensure_connection()
+        tdconn = await get_connection()
         cur = tdconn.cursor()
         rows = cur.execute("")
         return format_text_response(list([row for row in rows.fetchall()]))
@@ -787,14 +667,11 @@ async def enable_filter_in_default() -> ResponseType:
         logger.error(f"Error showing sessions: {e}")
         return format_error_response(str(e))
     
+@with_connection_retry()
 async def enable_filter_rule() -> ResponseType:
     """Enable the filter rule """
     try:
-        global _connection_manager
-        if not _connection_manager:
-            return format_error_response("Database connection not initialized")
-        
-        tdconn = await _connection_manager.ensure_connection()
+        tdconn = await get_connection()
         cur = tdconn.cursor()
         rows = cur.execute("")
         return format_text_response(list([row for row in rows.fetchall()]))
@@ -802,14 +679,11 @@ async def enable_filter_rule() -> ResponseType:
         logger.error(f"Error showing sessions: {e}")
         return format_error_response(str(e))
 
+@with_connection_retry()
 async def activate_rulset(RuleName: str) -> ResponseType:
     """Activate the {RuleName} ruleset with the new filter rule. """
     try:
-        global _connection_manager
-        if not _connection_manager:
-            return format_error_response("Database connection not initialized")
-        
-        tdconn = await _connection_manager.ensure_connection()
+        tdconn = await get_connection()
         cur = tdconn.cursor()
         rows = cur.execute("")
         return format_text_response(list([row for row in rows.fetchall()]))
@@ -829,7 +703,7 @@ async def handle_list_tools() -> list[types.Tool]:
     return [
         types.Tool(
             name="show_sessions",
-            description="Show my sessions",
+            description="Display all active database sessions for the current user. Use this to monitor running queries, identify long-running operations, find session IDs for detailed analysis, or check current database activity. Returns session details including session number, username, SQL text, runtime, and state.",
             inputSchema={
                 "type": "object",
                 "properties": {},
@@ -837,7 +711,7 @@ async def handle_list_tools() -> list[types.Tool]:
         ),
         types.Tool(
             name="show_physical_resources",
-            description="Monitor system resources",
+            description="Display current physical system resources including CPU, memory, and I/O utilization. Use this for capacity planning, health checks, or when investigating performance degradation. Returns metrics for CPU usage, memory consumption, disk I/O, and network activity across the system.",
             inputSchema={
                 "type": "object",
                 "properties": {},
@@ -845,7 +719,7 @@ async def handle_list_tools() -> list[types.Tool]:
         ),
         types.Tool(
             name="monitor_amp_load",
-            description="Monitor AMP load",
+            description="Monitor Access Module Processor (AMP) load and utilization. AMPs are Teradata's parallel processing units. Use this to check if the system is CPU-bound, identify AMP skew (unbalanced load distribution), or verify system capacity. Returns CPU utilization percentage for each AMP.",
             inputSchema={
                 "type": "object",
                 "properties": {},
@@ -853,7 +727,7 @@ async def handle_list_tools() -> list[types.Tool]:
         ),
           types.Tool(
             name="monitor_awt",
-            description="Monitor AWT (Amp Worker Task) resources",
+            description="Monitor AMP Worker Task (AWT) resource usage. AWTs are the task slots that execute query operations. Use this to check if task slots are exhausted (causing query delays) or to understand concurrency limits. Returns current AWT usage, available slots, and task queue depth.",
             inputSchema={
                 "type": "object",
                 "properties": {},
@@ -861,7 +735,7 @@ async def handle_list_tools() -> list[types.Tool]:
         ),
         types.Tool(
             name="monitor_config",
-            description="Monitor virtual config",
+            description="Display virtual configuration settings for the Teradata system. Shows resource allocations, node configuration, and virtual system parameters. Use this to verify system setup, check VM resource allocations, or troubleshoot configuration issues. Returns virtual CPU, memory, and node configuration details.",
             inputSchema={
                 "type": "object",
                 "properties": {},
@@ -869,13 +743,13 @@ async def handle_list_tools() -> list[types.Tool]:
         ),
         types.Tool(
             name="show_sql_steps_for_session",
-            description="Show SQL steps for a session",
+            description="Display the execution plan steps for a specific session's query. Use this to analyze query performance, understand complex query execution, or troubleshoot slow queries. Requires sessionNo parameter. Returns detailed step-by-step execution plan with estimated costs and row counts.",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "sessionNo": {
                         "type": "integer",
-                        "description": "Session Number",
+                        "description": "Session Number to retrieve execution steps for",
                     },
                 },
                 "required": ["sessionNo"],
@@ -883,13 +757,13 @@ async def handle_list_tools() -> list[types.Tool]:
         ),
         types.Tool(
             name="show_sql_text_for_session",
-            description="Show SQL text for a session",
+            description="Display the full SQL text being executed by a specific session. Use this to see what query a session is running, especially useful when investigating blocking or performance issues. Requires sessionNo parameter. Returns the complete SQL statement text.",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "sessionNo": {
                         "type": "integer",
-                        "description": "Session Number",
+                        "description": "Session Number to retrieve SQL text for",
                     },
                 },
                 "required": ["sessionNo"],
@@ -897,7 +771,7 @@ async def handle_list_tools() -> list[types.Tool]:
         ),
         types.Tool(
             name="identify_blocking",
-            description="Identify blocking users",
+            description="Identify sessions that are blocking other sessions from executing. Use this when queries appear stuck or when investigating why queries are delayed. Returns information about blocking sessions (blockers) and blocked sessions (waiters), including session IDs and users involved.",
             inputSchema={
                 "type": "object",
                 "properties": {},
@@ -905,7 +779,7 @@ async def handle_list_tools() -> list[types.Tool]:
         ),
         types.Tool(
             name="list_active_WD",
-            description="List active workloads (WD)",
+            description="List all currently active workload definitions (WD). Workloads are categories that classify and manage different types of queries (e.g., ETL, Reporting, Ad-hoc). Use this to see which workloads are enabled, verify workload configuration, or understand current workload management setup. Returns workload names, states, and basic configuration.",
             inputSchema={
                 "type": "object",
                 "properties": {},
@@ -913,7 +787,7 @@ async def handle_list_tools() -> list[types.Tool]:
         ),
         types.Tool(
             name="list_WD",
-            description="List workloads (WD)",
+            description="List ALL workload definitions, both active and inactive. Use this to see the complete workload inventory, identify inactive workloads that could be activated, or review the full workload management configuration. Returns all workload names with their active/inactive status.",
             inputSchema={
                 "type": "object",
                 "properties": {},
@@ -921,13 +795,13 @@ async def handle_list_tools() -> list[types.Tool]:
         ),
         types.Tool(
             name="abort_sessions_user",
-            description="Abort sessions for a user",
+            description="⚠️ TERMINATES all active sessions for a specified user. This immediately kills all running queries for that user. Use cautiously for emergency situations like runaway queries or when a user's sessions must be stopped. IMPORTANT: This cannot be undone and will rollback any uncommitted work. Requires user parameter.",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "user": {
                         "type": "string",
-                        "description": "User name to abort",
+                        "description": "Username whose sessions should be terminated (all sessions will be killed)",
                     },
                 },
                 "required": ["user"],
@@ -935,7 +809,7 @@ async def handle_list_tools() -> list[types.Tool]:
         ),
         types.Tool(
             name="list_delayed_request",
-            description="List all of the delayed queries",
+            description="List all queries currently waiting in delay queues. Queries are delayed when they hit throttle limits, wait for locks, or are held by workload management rules. Use this to see why queries are waiting, identify queue backlogs, or check if specific users/queries are delayed. Returns session IDs, delay reasons, wait times, and queue types.",
             inputSchema={
                 "type": "object",
                 "properties": {},
@@ -943,13 +817,13 @@ async def handle_list_tools() -> list[types.Tool]:
         ),
         types.Tool(
             name="abort_delayed_request",
-            description="abort a delayed request on session {sessionNo}",
+            description="⚠️ CANCEL and permanently abort a delayed query in the queue. The query will not execute and will be terminated. Use this to remove unnecessary or problematic queries from the queue. Requires sessionNo parameter. IMPORTANT: This cannot be undone - the query will need to be resubmitted if needed.",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "sessionNo": {
                         "type": "integer",
-                        "description": "Session Number",
+                        "description": "Session Number of the delayed request to abort",
                     },
                 },
                 "required": ["sessionNo"],
@@ -957,7 +831,7 @@ async def handle_list_tools() -> list[types.Tool]:
         ),
         types.Tool(
             name="list_utility_stats",
-            description="List statistics for utility use on the system",
+            description="Display statistics for utility operations (FastLoad, MultiLoad, TPump, etc.) running on the system. Use this to monitor utility performance, check if utilities are consuming excessive resources, or track utility usage patterns. Returns utility names, resource consumption, runtime, and status.",
             inputSchema={
                 "type": "object",
                 "properties": {},
@@ -965,7 +839,7 @@ async def handle_list_tools() -> list[types.Tool]:
         ),
         types.Tool(
             name="display_delay_queue",
-            description="display {type} delay queue",
+            description="Display details for a specific type of delay queue. Valid types: 'WORKLOAD' (throttled by workload rules), 'SYSTEM' (waiting for locks/resources), 'UTILITY' (utility operations queued), or 'ALL' (all queues). Use this to focus on a specific queue type when investigating delays. Returns detailed queue information including wait times, queue depth, and affected sessions.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -979,7 +853,7 @@ async def handle_list_tools() -> list[types.Tool]:
         ),
         types.Tool(
             name="release_delay_queue",
-            description="Releases a request or utility session in the queue for session {sessionNo} or user {userName}",
+            description="Release a delayed query from the queue, allowing it to execute immediately. Use this to manually override throttles or resolve stuck queries when system resources are available. Provide either sessionNo (for specific session) or userName (for all that user's delayed requests). CAUTION: Releasing many queries at once can overload the system.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -997,7 +871,7 @@ async def handle_list_tools() -> list[types.Tool]:
         ), 
         types.Tool(
             name="show_tdwm_summary",
-            description="Show workloads summary information",
+            description="Display a summary dashboard of workload distribution across the system. Shows how queries and resources are distributed among different workloads. Use this to understand workload balance, verify classification is working correctly, or identify which workloads are consuming the most resources. Returns query counts, resource usage, and distribution metrics by workload.",
             inputSchema={
                 "type": "object",
                 "properties": {},
@@ -1005,7 +879,7 @@ async def handle_list_tools() -> list[types.Tool]:
         ),       
         types.Tool(
             name="show_trottle_statistics",
-            description="Show throttle statistics for {type}",
+            description="Display throttle statistics showing how throttles are managing query concurrency. Valid types: 'ALL' (all throttles), 'QUERY' (query-level throttles), 'SESSION' (session-level throttles), or 'WORKLOAD' (workload-level throttles). Use this to analyze throttle effectiveness, identify over-throttling, or verify throttle limits are working. Returns throttle names, limits, current usage, and delay counts.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -1019,7 +893,7 @@ async def handle_list_tools() -> list[types.Tool]:
         ),
         types.Tool(
             name="list_query_band",
-            description="List query band for {type}",
+            description="List query bands by type. Query bands are application-set tags that identify and classify queries. Valid types: 'TRANSACTION' (transaction-level bands), 'PROFILE' (profile-level bands), 'SESSION' (session-level bands), or 'ALL' (all types). Use this to understand how queries are being tagged, verify application query band usage, or troubleshoot workload classification. Returns query band names and values currently in use.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -1033,7 +907,7 @@ async def handle_list_tools() -> list[types.Tool]:
         ),   
         types.Tool(
             name="monitor_session_query_band",
-            description="Monitor query band for session {sessionNo}",
+            description="Display the query band settings for a specific session. Use this to see how a particular session is tagged, verify application is setting query bands correctly, or troubleshoot why a query is being classified into the wrong workload. Requires sessionNo parameter. Returns all query band name-value pairs for that session.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -1047,7 +921,7 @@ async def handle_list_tools() -> list[types.Tool]:
         ),  
         types.Tool(
             name="show_query_log",
-            description="Show query log for user {user}",
+            description="Display historical query log (DBQL) for a specific user. Shows past query execution including SQL text, execution times, resource consumption, and performance metrics. Use this to analyze user query patterns, identify frequently-slow queries, or investigate historical performance issues. Requires user parameter. Returns query history with timestamps, SQL, runtime, CPU time, and I/O statistics.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -1061,7 +935,7 @@ async def handle_list_tools() -> list[types.Tool]:
         ), 
         types.Tool(
             name="show_cod_limits",
-            description="Show COD (Capacity On Demand) limits",
+            description="Display Capacity on Demand (COD) resource limits and usage. COD allows temporary capacity increases beyond base system. Use this for capacity planning, checking if temporary capacity is available, or monitoring COD resource consumption. Returns COD limits, current usage, and available temporary capacity.",
             inputSchema={
                 "type": "object",
                 "properties": {},
@@ -1069,7 +943,7 @@ async def handle_list_tools() -> list[types.Tool]:
         ),
         types.Tool(
             name="tdwm_list_clasification",
-            description="List clasification types for workload (TASM) rule",
+            description="List all available classification types that can be used in TASM (Teradata Active System Management) workload rules. Classification types include USER, APPL, TABLE, QUERYBAND, etc. Use this to see what criteria are available when creating or modifying workload rules, throttles, or filters. Returns classification types with their categories and expected value formats.",
             inputSchema={
                 "type": "object",
                 "properties": {},
@@ -1077,7 +951,7 @@ async def handle_list_tools() -> list[types.Tool]:
         ),
         types.Tool(
             name="show_top_users",
-            description="Show {type} users using the most resources",
+            description="Display users consuming the most system resources. Valid types: 'TOP' (top consumers), 'ALL' (all users), or 'SYSTEM' (system accounts). Use this to identify resource-heavy users, find sources of system load, or track resource consumption by user for chargeback. Returns usernames, CPU time, I/O, spool usage, and query counts ranked by resource consumption.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -1091,7 +965,7 @@ async def handle_list_tools() -> list[types.Tool]:
         ),
         types.Tool(
             name="show_sw_event_log",
-            description="Show {Type} event log",
+            description="Display system software event logs. Valid types: 'OPERATIONAL' (operational events) or 'ALL' (all event types). Use this to troubleshoot system issues, review recent system events, or investigate errors and warnings. Returns timestamped event log entries with event types, severity, and descriptions.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -1105,7 +979,7 @@ async def handle_list_tools() -> list[types.Tool]:
         ),
         types.Tool(
             name="show_tasm_statistics",
-            description="Show TASM statistics",
+            description="Display Teradata Active System Management (TASM) performance statistics. Shows how workload management rules are functioning, including rule activations, exceptions, throttle actions, and workload classifications. Use this to verify TASM is working correctly, identify rule effectiveness, or troubleshoot workload management issues. Returns TASM metrics including rule firing counts, exception counts, and classification statistics.",
             inputSchema={
                 "type": "object",
                 "properties": {},
@@ -1113,7 +987,7 @@ async def handle_list_tools() -> list[types.Tool]:
         ),
         types.Tool(
             name="show_tasm_even_history",
-            description="Show TASM event history",
+            description="Display historical TASM event log showing when workload management rules fired and what actions were taken. Use this to understand TASM behavior over time, troubleshoot why queries were delayed/rejected, or analyze workload management patterns. Returns timestamped TASM events including rule names, actions taken, and affected queries.",
             inputSchema={
                 "type": "object",
                 "properties": {},
@@ -1121,7 +995,7 @@ async def handle_list_tools() -> list[types.Tool]:
         ),
         types.Tool(
             name="show_tasm_rule_history_red",
-            description="Show what caused the system to enter the RED state",
+            description="Display the events and conditions that caused the system to enter RED state (critical resource shortage). RED state indicates severe resource constraints triggering emergency workload management actions. Use this to diagnose system overload incidents, understand what caused critical resource exhaustion, or perform post-incident analysis. Returns events leading to RED state including resource thresholds exceeded and timeline.",
             inputSchema={
                 "type": "object",
                 "properties": {},
@@ -1129,7 +1003,7 @@ async def handle_list_tools() -> list[types.Tool]:
         ),
         types.Tool(
             name="create_filter_rule",
-            description="Create filter rule",
+            description="⚠️ DEPRECATED/STUB: This is a legacy placeholder. Use 'create_filter' from Priority 1 Configuration Management tools instead. This function has no implementation and will not work.",
             inputSchema={
                 "type": "object",
                 "properties": {},
@@ -1137,7 +1011,7 @@ async def handle_list_tools() -> list[types.Tool]:
         ),
         types.Tool(
             name="add_class_criteria",
-            description="Add classification criteria",
+            description="⚠️ DEPRECATED/STUB: This is a legacy placeholder. Use 'add_classification_to_rule' from Priority 1 Configuration Management tools instead. This function has no implementation and will not work.",
             inputSchema={
                 "type": "object",
                 "properties": {},
@@ -1145,7 +1019,7 @@ async def handle_list_tools() -> list[types.Tool]:
         ),
         types.Tool(
             name="enable_filter_in_default",
-            description="Enable the filter in the default state",
+            description="⚠️ DEPRECATED/STUB: This is a legacy placeholder. Use 'create_filter' and 'enable_filter' from Priority 1 Configuration Management tools instead. This function has no implementation and will not work.",
             inputSchema={
                 "type": "object",
                 "properties": {},
@@ -1153,7 +1027,7 @@ async def handle_list_tools() -> list[types.Tool]:
         ),
         types.Tool(
             name="enable_filter_rule",
-            description="Enable the filter rule",
+            description="⚠️ DEPRECATED/STUB: This is a legacy placeholder. Use 'enable_filter' from Priority 1 Configuration Management tools instead. This function has no implementation and will not work.",
             inputSchema={
                 "type": "object",
                 "properties": {},
@@ -1161,7 +1035,7 @@ async def handle_list_tools() -> list[types.Tool]:
         ),
         types.Tool(
             name="activate_rulset",
-            description="Activate the {RuleName} ruleset with the new filter rule",
+            description="⚠️ DEPRECATED: This is a legacy stub. Use 'activate_ruleset' (note correct spelling) from Priority 1 Configuration Management tools instead. This function has minimal implementation.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -1171,6 +1045,323 @@ async def handle_list_tools() -> list[types.Tool]:
                     },
                 },
                 "required": ["RuleName"],
+            },
+        ),
+        # ========== Priority 1 Configuration Management Tools ==========
+        types.Tool(
+            name="create_system_throttle",
+            description="Create a new system-level throttle rule to limit concurrent query execution. Throttles prevent resource monopolization by restricting how many queries can run simultaneously. Use this to control system load, prevent specific query types from overwhelming resources, or enforce concurrency limits during business hours. REQUIRES: ruleset_name, throttle_name, description, limit (concurrent queries allowed). OPTIONAL: classification_criteria (to target specific apps/users/tables), throttle_type (DM=member with disable override). IMPORTANT: Changes require activation - call activate_ruleset after creation to make the throttle live.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "ruleset_name": {
+                        "type": "string",
+                        "description": "Ruleset name (e.g., 'MyFirstConfig')"
+                    },
+                    "throttle_name": {
+                        "type": "string",
+                        "description": "Name for the new throttle"
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "Description of throttle purpose"
+                    },
+                    "throttle_type": {
+                        "type": "string",
+                        "description": "Type: DM=disable override member, M=member",
+                        "default": "DM"
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "Maximum concurrent queries allowed",
+                        "minimum": 1
+                    },
+                    "classification_criteria": {
+                        "type": "array",
+                        "description": "Optional list of classification criteria",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "description": {"type": "string"},
+                                "type": {"type": "string"},
+                                "value": {"type": "string"},
+                                "operator": {"type": "string"}
+                            }
+                        }
+                    }
+                },
+                "required": ["ruleset_name", "throttle_name", "description", "limit"]
+            },
+        ),
+        types.Tool(
+            name="modify_throttle_limit",
+            description="Dynamically adjust the concurrency limit of an existing throttle without recreating it. Use this to increase/decrease throttle limits based on time of day, system load, or changing business needs (e.g., increase limit from 5 to 10 during off-peak hours, decrease back to 5 during business hours). REQUIRES: ruleset_name, throttle_name, new_limit. CHANGES REQUIRE ACTIVATION: Call activate_ruleset after modification. Common use case: React to performance issues by temporarily reducing concurrency, then restore when resolved.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "ruleset_name": {
+                        "type": "string",
+                        "description": "Ruleset name containing the throttle"
+                    },
+                    "throttle_name": {
+                        "type": "string",
+                        "description": "Name of the throttle to modify"
+                    },
+                    "new_limit": {
+                        "type": "integer",
+                        "description": "New concurrency limit",
+                        "minimum": 1
+                    }
+                },
+                "required": ["ruleset_name", "throttle_name", "new_limit"]
+            },
+        ),
+        types.Tool(
+            name="delete_throttle",
+            description="⚠️ PERMANENTLY DELETE a throttle rule from the ruleset configuration. Use this to remove obsolete throttles or clean up unused rules. The throttle will no longer limit query concurrency. REQUIRES: ruleset_name, throttle_name. CHANGES REQUIRE ACTIVATION: Call activate_ruleset after deletion. CAUTION: Deletion is permanent - recreate the throttle if needed later. Best practice: Disable the throttle first to test impact before permanent deletion.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "ruleset_name": {
+                        "type": "string",
+                        "description": "Ruleset name containing the throttle"
+                    },
+                    "throttle_name": {
+                        "type": "string",
+                        "description": "Name of the throttle to delete"
+                    }
+                },
+                "required": ["ruleset_name", "throttle_name"]
+            },
+        ),
+        types.Tool(
+            name="enable_throttle",
+            description="Enable (activate) a previously disabled throttle rule to start enforcing its concurrency limits. Use this to temporarily turn on a throttle that was disabled, such as enabling a maintenance throttle during backup windows, activating seasonal throttles during peak periods, or re-enabling after testing. REQUIRES: ruleset_name, throttle_name. CHANGES REQUIRE ACTIVATION: Call activate_ruleset to apply. The throttle will begin limiting queries immediately after activation.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "ruleset_name": {
+                        "type": "string",
+                        "description": "Ruleset name containing the throttle"
+                    },
+                    "throttle_name": {
+                        "type": "string",
+                        "description": "Name of the throttle to enable"
+                    }
+                },
+                "required": ["ruleset_name", "throttle_name"]
+            },
+        ),
+        types.Tool(
+            name="disable_throttle",
+            description="Disable (deactivate) a throttle rule to stop enforcing its concurrency limits without deleting it. Use this to temporarily turn off a throttle, such as disabling maintenance throttles after backup completes, removing limits during testing, or temporarily increasing system capacity. REQUIRES: ruleset_name, throttle_name. CHANGES REQUIRE ACTIVATION: Call activate_ruleset to apply. The throttle remains defined but won't limit queries until re-enabled.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "ruleset_name": {
+                        "type": "string",
+                        "description": "Ruleset name containing the throttle"
+                    },
+                    "throttle_name": {
+                        "type": "string",
+                        "description": "Name of the throttle to disable"
+                    }
+                },
+                "required": ["ruleset_name", "throttle_name"]
+            },
+        ),
+        types.Tool(
+            name="create_filter",
+            description="Create a filter rule to BLOCK or REJECT queries matching specific criteria. Filters prevent certain queries from executing at all. Use this for maintenance windows (block all queries during backup), security restrictions (prevent specific users from querying sensitive tables), or preventing problematic query patterns (block full table scans on large tables). REQUIRES: ruleset_name, filter_name, description. OPTIONAL: classification_criteria (to target specific queries by user/app/table), action ('E'=Exception/reject with error message or 'A'=Abort query). CHANGES REQUIRE ACTIVATION: Call activate_ruleset to make live. ⚠️ CAUTION: Filters PREVENT query execution - verify criteria carefully to avoid blocking legitimate queries.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "ruleset_name": {
+                        "type": "string",
+                        "description": "Ruleset name (e.g., 'MyFirstConfig')"
+                    },
+                    "filter_name": {
+                        "type": "string",
+                        "description": "Name for the new filter"
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "Description of filter purpose"
+                    },
+                    "classification_criteria": {
+                        "type": "array",
+                        "description": "List of classification criteria to match",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "description": {"type": "string"},
+                                "type": {"type": "string"},
+                                "value": {"type": "string"},
+                                "operator": {"type": "string"}
+                            }
+                        }
+                    },
+                    "action": {
+                        "type": "string",
+                        "description": "Action: E=Exception (reject), A=Abort",
+                        "default": "E"
+                    }
+                },
+                "required": ["ruleset_name", "filter_name", "description"]
+            },
+        ),
+        types.Tool(
+            name="delete_filter",
+            description="⚠️ PERMANENTLY DELETE a filter rule from the ruleset configuration. The filter will no longer block queries. Use this to remove obsolete filters or clean up unused rules. REQUIRES: ruleset_name, filter_name. CHANGES REQUIRE ACTIVATION: Call activate_ruleset after deletion. CAUTION: Deletion is permanent - recreate the filter if needed later. Previously blocked queries will be allowed to execute after filter deletion and activation.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "ruleset_name": {
+                        "type": "string",
+                        "description": "Ruleset name containing the filter"
+                    },
+                    "filter_name": {
+                        "type": "string",
+                        "description": "Name of the filter to delete"
+                    }
+                },
+                "required": ["ruleset_name", "filter_name"]
+            },
+        ),
+        types.Tool(
+            name="enable_filter",
+            description="Enable (activate) a previously disabled filter rule to start blocking matching queries. Use this to turn on filters for maintenance windows (enable before backup, disable after), activate time-based restrictions, or re-enable security filters after testing. REQUIRES: ruleset_name, filter_name. CHANGES REQUIRE ACTIVATION: Call activate_ruleset to apply. ⚠️ The filter will immediately block matching queries after activation - ensure timing is correct.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "ruleset_name": {
+                        "type": "string",
+                        "description": "Ruleset name containing the filter"
+                    },
+                    "filter_name": {
+                        "type": "string",
+                        "description": "Name of the filter to enable"
+                    }
+                },
+                "required": ["ruleset_name", "filter_name"]
+            },
+        ),
+        types.Tool(
+            name="disable_filter",
+            description="Disable (deactivate) a filter rule to stop blocking queries without deleting it. Use this to turn off filters after maintenance completes, remove temporary restrictions, or disable during testing. REQUIRES: ruleset_name, filter_name. CHANGES REQUIRE ACTIVATION: Call activate_ruleset to apply. The filter remains defined but won't block queries until re-enabled. Previously blocked queries will be allowed after disable and activation.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "ruleset_name": {
+                        "type": "string",
+                        "description": "Ruleset name containing the filter"
+                    },
+                    "filter_name": {
+                        "type": "string",
+                        "description": "Name of the filter to disable"
+                    }
+                },
+                "required": ["ruleset_name", "filter_name"]
+            },
+        ),
+        types.Tool(
+            name="add_classification_to_rule",
+            description="Add classification criteria to an existing rule (throttle, filter, or workload) to refine what queries it matches. Classification types include: USER (username), APPL (application name), TABLE (table name), QUERYBAND (query band tags), STMT (statement type like DDL/DML/SELECT), CLIENTADDR (IP address), and more. Use this to add additional matching conditions to rules, such as adding a second application to a throttle or adding user restrictions to a filter. REQUIRES: ruleset_name, rule_name, description, classification_type, classification_value. OPTIONAL: operator ('I'=Inclusion only this value, 'O'=ORing with other criteria, 'IO'=Both). CHANGES REQUIRE ACTIVATION: Call activate_ruleset to apply. Multiple classifications can be added to create complex matching logic.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "ruleset_name": {
+                        "type": "string",
+                        "description": "Ruleset name"
+                    },
+                    "rule_name": {
+                        "type": "string",
+                        "description": "Name of the rule to modify"
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "Description of this classification"
+                    },
+                    "classification_type": {
+                        "type": "string",
+                        "description": "Type (USER, APPL, TABLE, QUERYBAND, etc.)"
+                    },
+                    "classification_value": {
+                        "type": "string",
+                        "description": "Value to match"
+                    },
+                    "operator": {
+                        "type": "string",
+                        "description": "Operator: I=Inclusion, O=ORing, IO=Both",
+                        "default": "I"
+                    }
+                },
+                "required": ["ruleset_name", "rule_name", "description", "classification_type", "classification_value"]
+            },
+        ),
+        types.Tool(
+            name="add_subcriteria_to_target",
+            description="Add sub-criteria to refine a target classification for advanced rule targeting. Sub-criteria types include: FTSCAN (detect full table scans), MINSTEPTIME (minimum estimated step time in seconds), MAXSTEPTIME (maximum step time), MINTOTALTIME (minimum total query time), JOIN (join type detection), MEMORY (memory usage level), and more. Use this for sophisticated rules like 'throttle only full table scans on LargeTable' or 'filter queries with estimated time > 1 hour'. REQUIRES: ruleset_name, rule_name, target_type (TABLE/DB/VIEW), target_value (e.g., 'myDB.LargeTable'), description, subcriteria_type. OPTIONAL: subcriteria_value (e.g., '3600' for MINSTEPTIME). CHANGES REQUIRE ACTIVATION. Example: Add FTSCAN to throttle full scans without affecting index-based queries on same table.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "ruleset_name": {
+                        "type": "string",
+                        "description": "Ruleset name"
+                    },
+                    "rule_name": {
+                        "type": "string",
+                        "description": "Name of the rule"
+                    },
+                    "target_type": {
+                        "type": "string",
+                        "description": "Type of target (TABLE, DB, VIEW, etc.)"
+                    },
+                    "target_value": {
+                        "type": "string",
+                        "description": "Value of target (e.g., 'myDB.TableA')"
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "Description of sub-criteria"
+                    },
+                    "subcriteria_type": {
+                        "type": "string",
+                        "description": "Sub-criteria type (FTSCAN, MINSTEPTIME, JOIN, etc.)"
+                    },
+                    "subcriteria_value": {
+                        "type": "string",
+                        "description": "Value for sub-criteria (e.g., '3600' for MINSTEPTIME)"
+                    },
+                    "operator": {
+                        "type": "string",
+                        "description": "Operator: I=Inclusion",
+                        "default": "I"
+                    }
+                },
+                "required": ["ruleset_name", "rule_name", "target_type", "target_value", "description", "subcriteria_type"]
+            },
+        ),
+        types.Tool(
+            name="activate_ruleset",
+            description="⚠️ ACTIVATE a ruleset to apply ALL pending configuration changes to the live system. This makes throttles, filters, and rule modifications take effect immediately. MUST BE CALLED after any create, modify, enable, disable, or delete operations on rules. Use this as the final step after making one or more configuration changes. REQUIRES: ruleset_name. IMMEDIATE EFFECT: Changes go live immediately upon successful activation and will affect query execution right away. IMPORTANT: Always verify your changes are correct before activating. Consider testing changes in non-production environment first. TIP: You can make multiple changes (create throttle, add criteria, set limits) then activate once to apply all changes atomically.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "ruleset_name": {
+                        "type": "string",
+                        "description": "Name of the ruleset to activate"
+                    }
+                },
+                "required": ["ruleset_name"]
+            },
+        ),
+        types.Tool(
+            name="list_rulesets",
+            description="List all available rulesets (configuration containers) in the system. Rulesets are named collections that group throttles, filters, and workload rules together. Typically one ruleset is active at a time (commonly named 'MyFirstConfig' or similar). Use this to see what rulesets exist, identify which ruleset contains your rules, find the active ruleset name before making configuration changes, or verify ruleset configuration. Returns ruleset names with their active/inactive status and configuration details. Most systems have one primary ruleset, but may have others for testing or alternate configurations.",
+            inputSchema={
+                "type": "object",
+                "properties": {}
             },
         ),
     ]
@@ -1293,6 +1484,99 @@ async def handle_tool_call(
             return tool_response
         elif name == "activate_rulset":
             tool_response = await activate_rulset(arguments["RuleName"])
+            return tool_response
+        # ========== Priority 1 Configuration Management Dispatch ==========
+        elif name == "create_system_throttle":
+            tool_response = await create_system_throttle(
+                arguments["ruleset_name"],
+                arguments["throttle_name"],
+                arguments["description"],
+                arguments.get("throttle_type", "DM"),
+                arguments["limit"],
+                arguments.get("classification_criteria")
+            )
+            return tool_response
+        elif name == "modify_throttle_limit":
+            tool_response = await modify_throttle_limit(
+                arguments["ruleset_name"],
+                arguments["throttle_name"],
+                arguments["new_limit"]
+            )
+            return tool_response
+        elif name == "delete_throttle":
+            tool_response = await delete_throttle(
+                arguments["ruleset_name"],
+                arguments["throttle_name"]
+            )
+            return tool_response
+        elif name == "enable_throttle":
+            tool_response = await enable_throttle(
+                arguments["ruleset_name"],
+                arguments["throttle_name"]
+            )
+            return tool_response
+        elif name == "disable_throttle":
+            tool_response = await disable_throttle(
+                arguments["ruleset_name"],
+                arguments["throttle_name"]
+            )
+            return tool_response
+        elif name == "create_filter":
+            tool_response = await create_filter(
+                arguments["ruleset_name"],
+                arguments["filter_name"],
+                arguments["description"],
+                arguments.get("classification_criteria"),
+                arguments.get("action", "E")
+            )
+            return tool_response
+        elif name == "delete_filter":
+            tool_response = await delete_filter(
+                arguments["ruleset_name"],
+                arguments["filter_name"]
+            )
+            return tool_response
+        elif name == "enable_filter":
+            tool_response = await enable_filter(
+                arguments["ruleset_name"],
+                arguments["filter_name"]
+            )
+            return tool_response
+        elif name == "disable_filter":
+            tool_response = await disable_filter(
+                arguments["ruleset_name"],
+                arguments["filter_name"]
+            )
+            return tool_response
+        elif name == "add_classification_to_rule":
+            tool_response = await add_classification_to_rule(
+                arguments["ruleset_name"],
+                arguments["rule_name"],
+                arguments["description"],
+                arguments["classification_type"],
+                arguments["classification_value"],
+                arguments.get("operator", "I")
+            )
+            return tool_response
+        elif name == "add_subcriteria_to_target":
+            tool_response = await add_subcriteria_to_target(
+                arguments["ruleset_name"],
+                arguments["rule_name"],
+                arguments["target_type"],
+                arguments["target_value"],
+                arguments["description"],
+                arguments["subcriteria_type"],
+                arguments.get("subcriteria_value"),
+                arguments.get("operator", "I")
+            )
+            return tool_response
+        elif name == "activate_ruleset":
+            tool_response = await activate_ruleset(
+                arguments["ruleset_name"]
+            )
+            return tool_response
+        elif name == "list_rulesets":
+            tool_response = await list_rulesets()
             return tool_response
         return [types.TextContent(type="text", text=f"Unsupported tool: {name}")]
 

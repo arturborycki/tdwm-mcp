@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+
+# Virtual Environment
+.venv/
+venv/
+ENV/
+
+# Environment variables
+.env
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Development files
+*.backup
+*.tmp
+*.temp
+*_SUMMARY.md
+*_FIX.md
+*_COMPLETE.md
+IMPLEMENTATION_PLAN.md
+
+# Build artifacts
+*.whl
+*.tar.gz
