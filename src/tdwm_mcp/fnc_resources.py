@@ -8,12 +8,16 @@ Provides access to database schemas, tables, and TDWM configuration as resources
 import logging
 from typing import Any
 import mcp.types as types
+from mcp.server.lowlevel.helper_types import ReadResourceContents
 import os
 import re
 from urllib.parse import urlparse
 from .connection_manager import TeradataConnectionManager
 from .retry_utils import with_connection_retry
 from .fnc_common import acquire_connection
+from ._mcp_app_constants import MCP_APP_CSP, MCP_APP_MIME_TYPE, UI_URI_SCHEME
+from ._mcp_app_render import render_app_html
+from .fnc_tools_visualize import list_visualize_resources
 
 # Import reference data resource handlers
 from .resource_reference import (
@@ -61,6 +65,30 @@ def format_text_response(text: Any) -> str:
 def format_error_response(error: str) -> str:
     """Format an error response."""
     return f"Error: {error}"
+
+
+# MCP Apps URI parser: ui://<tool>/mcp-app.html
+_UI_URI_RE = re.compile(r"^ui://(?P<tool>[A-Za-z0-9_\-]+)/mcp-app\.html$")
+
+
+async def _read_ui_resource(uri: str) -> list[ReadResourceContents]:
+    """Serve an MCP Apps HTML bundle for ``ui://<tool>/mcp-app.html``.
+
+    The bundle file on disk is named after the *app*, not the tool, so multiple
+    tools can share one bundle (e.g. all tier-2 charts use ``generic``). The
+    tool→app mapping is owned by ``fnc_tools_visualize``.
+    """
+    from .fnc_tools_visualize import app_name_for_ui_uri  # local import: cycle-safe
+
+    match = _UI_URI_RE.match(uri)
+    if not match:
+        raise ValueError(f"Malformed UI resource URI: {uri}")
+    tool_name = match.group("tool")
+    app_name = app_name_for_ui_uri(tool_name)
+    if app_name is None:
+        raise ValueError(f"Unknown UI resource: {uri}")
+    html = render_app_html(app_name)
+    return [ReadResourceContents(content=html, mime_type=MCP_APP_MIME_TYPE)]
 
 
 async def handle_list_resources() -> list[types.Resource]:
@@ -266,15 +294,29 @@ async def handle_list_resources() -> list[types.Resource]:
         )
     ]
 
+    # MCP Apps extension: UI bundles served at ui://<tool>/mcp-app.html.
+    # Declared as separate resources so hosts can prefetch and cache them.
+    resources.extend(list_visualize_resources())
+
     return resources
 
 
-async def handle_read_resource(uri: str) -> str:
-    """Read a specific resource."""
+async def handle_read_resource(uri: str):
+    """Read a specific resource.
+
+    Returns ``str`` for JSON/text resources (the legacy ``tdwm://`` family) and
+    a list of ``ReadResourceContents`` for HTML bundles (``ui://``) so the
+    MCP-Apps MIME type is preserved on the wire.
+    """
     # Convert AnyUrl object to string if needed
     uri = str(uri)
 
     logger.debug(f"Handling read_resource request for: {uri}")
+
+    # MCP Apps bundles: ui://<tool>/mcp-app.html — return HTML with the
+    # correct MIME type so hosts know to render in their app sandbox.
+    if uri.startswith(f"{UI_URI_SCHEME}://"):
+        return await _read_ui_resource(uri)
 
     try:
         # Legacy/Basic Resources

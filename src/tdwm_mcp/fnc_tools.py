@@ -42,6 +42,13 @@ from .fnc_tools_priority1 import (
     list_rulesets
 )
 
+# MCP Apps visualization companion tools (PR1: smoke test only).
+from .fnc_tools_visualize import (
+    handle_visualize_tool_call,
+    list_visualize_tools,
+    visualize_tool_names,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -1298,12 +1305,14 @@ async def handle_list_tools() -> list[types.Tool]:
                 "properties": {}
             },
         ),
+        # MCP Apps visualization companions.
+        *list_visualize_tools(),
     ]
 
 
 async def handle_tool_call(
     name: str, arguments: dict | None
-) -> list[types.TextContent | types.ImageContent | types.EmbeddedResource]:
+):
     """
     Handle tool execution requests with OAuth authorization.
     Tools can modify server state and notify clients of changes.
@@ -1317,6 +1326,13 @@ async def handle_tool_call(
         return [types.TextContent(type="text", text=f"Authorization Error: {error_msg}")]
 
     try:
+        # MCP Apps visualization tools — short-circuit before the main
+        # if/elif chain so they can return (content, structuredContent).
+        if name in visualize_tool_names():
+            result = await handle_visualize_tool_call(name, arguments)
+            if result is not None:
+                return result
+
         if name == "show_sessions":
             return await list_sessions()
         elif name == "show_physical_resources":

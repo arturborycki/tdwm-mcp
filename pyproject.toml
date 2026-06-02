@@ -30,3 +30,10 @@ build-backend = "hatchling.build"
 
 [project.scripts]
 tdwm-mcp = "tdwm_mcp:main"
+
+# Ship the MCP Apps static bundle (template + vendored JS + per-app code)
+# as package data. No build step; files are read at runtime by
+# tdwm_mcp._mcp_app_render. Hatch's default wheel builder picks up nested
+# non-Python files under the package directory automatically.
+[tool.hatch.build.targets.wheel]
+packages = ["src/tdwm_mcp"]

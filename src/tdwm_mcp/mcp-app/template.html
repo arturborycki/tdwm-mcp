@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta http-equiv="Content-Security-Policy" content="__CSP__" />
+<title>tdwm-mcp app</title>
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; background: transparent; }
+  body { font: 14px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: inherit; }
+  #app { display: flex; flex-direction: column; height: 100vh; min-height: 360px; }
+  #app > .toolbar { padding: 8px 12px; border-bottom: 1px solid rgba(127,127,127,0.2); display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  #app > .chart { flex: 1; min-height: 280px; }
+  #app > .status { padding: 8px 12px; font-size: 12px; opacity: 0.75; }
+  select, button { font: inherit; padding: 4px 8px; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div class="toolbar" id="toolbar"></div>
+  <div class="chart" id="chart"></div>
+  <div class="status" id="status">Waiting for data…</div>
+</div>
+<script>__ECHARTS_UMD__</script>
+<script type="module">
+__EXT_APPS_ESM__
+__APP_CODE__
+</script>
+</body>
+</html>
