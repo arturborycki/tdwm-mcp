@@ -47,6 +47,7 @@ _TOOL_TO_APP: dict[str, str] = {
     "visualize_amp_load": "generic",
     "visualize_awt": "generic",
     "visualize_query_log": "generic",
+    "visualize_sql_steps": "sql-steps",
 }
 
 
@@ -173,6 +174,25 @@ def list_visualize_tools() -> list[types.Tool]:
                 "required": ["user"],
             },
         ),
+        _tool(
+            "visualize_sql_steps",
+            "Visual EXPLAIN: render a query plan from MonitorSQLSteps as an "
+            "interactive directed graph. Same source data as "
+            "show_sql_steps_for_session, but nodes are sized by estimated rows, "
+            "colored by confidence (HIGH/LOW/NO/JOIN), and tooltips carry the "
+            "step text + estimated vs actual timing. Linear edges by step "
+            "number (parallel-branch detection deferred).",
+            {
+                "type": "object",
+                "properties": {
+                    "sessionNo": {
+                        "type": "integer",
+                        "description": "Session Number to render the EXPLAIN graph for",
+                    },
+                },
+                "required": ["sessionNo"],
+            },
+        ),
     ]
 
 
@@ -275,6 +295,203 @@ def _build_result(
     structured = {"title": title, "data": data, "meta": meta}
     summary = types.TextContent(type="text", text=_summary(tool_name, len(data), cols, note))
     return ([summary], structured)
+
+
+# Visual EXPLAIN shaper --------------------------------------------------------
+
+# Confidence codes returned by ``Confidence`` in MonitorSQLSteps. Teradata
+# encodes confidence as a SMALLINT but the column is wrapped in
+# ``(format '9')`` so we may get either the integer or its 1-char string form
+# back. Accept both, plus the letter form some clients return after
+# downstream tooling normalizes the value. Anything unrecognized → UNKNOWN so
+# the bundle still renders the node.
+_CONFIDENCE_MAP: dict[str, str] = {
+    "0": "LOW",
+    "1": "HIGH",
+    "2": "NO",
+    "3": "JOIN",
+    "L": "LOW",
+    "H": "HIGH",
+    "N": "NO",
+    "J": "JOIN",
+    "LOW": "LOW",
+    "HIGH": "HIGH",
+    "NO": "NO",
+    "JOIN": "JOIN",
+}
+
+# Max length of the per-step SQL text included in the tooltip. Keeps the
+# hover panel readable even for big multi-join steps.
+_STEP_TEXT_TOOLTIP_CHARS = 320
+
+
+def _confidence_label(raw: Any) -> str:
+    if raw is None:
+        return "UNKNOWN"
+    s = str(raw).strip().upper()
+    if not s:
+        return "UNKNOWN"
+    return _CONFIDENCE_MAP.get(s, "UNKNOWN")
+
+
+def _row_get(row: dict, *keys: str, default=None):
+    """Case-insensitive lookup over a row dict.
+
+    teradatasql preserves the alias casing chosen in the SQL (``Num``, ``ERC``),
+    but a future query change or copy might land lowercase. Walking the keys
+    once is cheap and saves us from constant case fights.
+    """
+    if not isinstance(row, dict):
+        return default
+    for k in keys:
+        if k in row:
+            return row[k]
+    lower = {kk.lower(): kk for kk in row.keys()}
+    for k in keys:
+        real = lower.get(k.lower())
+        if real is not None:
+            return row[real]
+    return default
+
+
+def _as_int(v: Any) -> int | None:
+    if v is None:
+        return None
+    try:
+        if isinstance(v, str):
+            v = v.strip()
+            if not v:
+                return None
+        return int(float(v))
+    except (TypeError, ValueError):
+        return None
+
+
+def _format_number(v: Any) -> str:
+    n = _as_int(v)
+    if n is None:
+        return "—"
+    return f"{n:,}"
+
+
+def _make_tooltip(step_num: int, conf: str, fields: dict[str, Any]) -> str:
+    step_text = fields.get("step_text") or ""
+    if len(step_text) > _STEP_TEXT_TOOLTIP_CHARS:
+        step_text = step_text[: _STEP_TEXT_TOOLTIP_CHARS - 1].rstrip() + "…"
+    lines = [
+        f"Step {step_num}",
+        "",
+        step_text,
+        "",
+        f"Confidence: {conf}",
+        f"Est rows: {_format_number(fields.get('est_rows'))}",
+        f"Act rows: {_format_number(fields.get('act_rows'))}",
+        f"Est time: {_format_number(fields.get('est_ms'))} cs",
+        f"Act time: {_format_number(fields.get('act_ms'))} cs",
+    ]
+    return "\n".join(lines)
+
+
+def build_explain_graph(rows: list[dict], *, session_no: int | None = None) -> dict[str, Any]:
+    """Convert MonitorSQLSteps rows into the ``sql-steps`` bundle's payload.
+
+    Output shape (matches what ``app/sql-steps.js`` expects):
+
+    .. code-block:: python
+
+        {
+            "title": "Visual EXPLAIN — session 123",
+            "nodes": [{"id", "name", "category", "value", "tooltip",
+                        "est_rows", "act_rows", "est_ms", "act_ms",
+                        "step_text"}, ...],
+            "links": [{"source", "target"}],          # linear by step number
+            "meta":  {"total_steps", "est_elapsed_cs",
+                       "act_elapsed_cs", "max_est_rows",
+                       "session_no", "row_count"}
+        }
+
+    Linear edges only in v1: parallel branches and step-dependency detection
+    are deferred. Missing or unknown fields degrade gracefully: a row with no
+    ``StepNum`` is dropped (without one we can't draw an edge), all others
+    fall back to ``"—"`` in the tooltip and produce a UNKNOWN-coloured node.
+    """
+    cleaned: list[tuple[int, dict]] = []
+    for row in rows or []:
+        num = _as_int(_row_get(row, "Num", "StepNum", "num"))
+        if num is None:
+            continue
+        cleaned.append((num, row))
+    cleaned.sort(key=lambda x: x[0])
+
+    nodes: list[dict[str, Any]] = []
+    sum_est_ms = 0
+    sum_act_ms = 0
+    max_est_rows = 0
+    for num, row in cleaned:
+        conf = _confidence_label(_row_get(row, "C", "Confidence"))
+        est_rows = _as_int(_row_get(row, "ERC", "EstRowCount"))
+        act_rows = _as_int(_row_get(row, "ARC", "ActRowCount"))
+        est_ms = _as_int(_row_get(row, "EET", "EstElapsedTime"))
+        act_ms = _as_int(_row_get(row, "AET", "ActElapsedTime"))
+        step_text = _row_get(row, "SQLStep", "sqlstep") or ""
+        if not isinstance(step_text, str):
+            step_text = str(step_text)
+
+        # Negative est_rows is Teradata's "unknown" sentinel — surface as 0 for
+        # the symbolSize scale so it doesn't dwarf the rest. Real value is
+        # still in node["est_rows"] / tooltip for inspection.
+        plot_value = max(0, est_rows) if est_rows is not None else 0
+
+        if est_rows is not None and est_rows > max_est_rows:
+            max_est_rows = est_rows
+        if est_ms is not None:
+            sum_est_ms += est_ms
+        if act_ms is not None:
+            sum_act_ms += act_ms
+
+        nodes.append({
+            "id": str(num),
+            "name": f"Step {num}",
+            "category": conf,
+            "value": plot_value,
+            "tooltip": _make_tooltip(num, conf, {
+                "step_text": step_text,
+                "est_rows": est_rows,
+                "act_rows": act_rows,
+                "est_ms": est_ms,
+                "act_ms": act_ms,
+            }),
+            "est_rows": est_rows,
+            "act_rows": act_rows,
+            "est_ms": est_ms,
+            "act_ms": act_ms,
+            "step_text": step_text,
+        })
+
+    links = [
+        {"source": nodes[i]["id"], "target": nodes[i + 1]["id"]}
+        for i in range(len(nodes) - 1)
+    ]
+
+    title = (
+        f"Visual EXPLAIN — session {session_no}"
+        if session_no is not None
+        else "Visual EXPLAIN"
+    )
+
+    return {
+        "title": title,
+        "nodes": nodes,
+        "links": links,
+        "meta": {
+            "total_steps": len(nodes),
+            "est_elapsed_cs": sum_est_ms,
+            "act_elapsed_cs": sum_act_ms,
+            "max_est_rows": max_est_rows,
+            "session_no": session_no,
+            "row_count": len(nodes),
+        },
+    }
 
 
 # Tool handlers ----------------------------------------------------------------
@@ -560,6 +777,71 @@ async def _visualize_query_log(user: str) -> ToolResult:
     )
 
 
+@with_connection_retry()
+async def _visualize_sql_steps(session_no: int) -> ToolResult:
+    session_no = int(session_no)
+    async with acquire_connection() as tdconn:
+        def _run():
+            _set_queryband(tdconn, "visualize_sql_steps")
+            # Step 1: resolve host id + logon PE for the target session via the
+            # caller's own session list (same path as show_sql_steps_for_session).
+            resolver = tdconn.cursor()
+            resolver.execute(
+                "SELECT HostId, LogonPENo FROM TABLE (monitormysessions()) as t1 "
+                "where SessionNo = ?",
+                [session_no],
+            )
+            head = resolver.fetchall()
+            if not head:
+                return None, [], None, None
+            host_id = int(head[0][0])
+            logon_pe = int(head[0][1])
+            # Step 2: pull plan steps. Column aliases match the existing tool.
+            query = (
+                "select "
+                "SQLStep, "
+                "StepNum (format '99') Num, "
+                "Confidence (format '9') C, "
+                "EstRowCount (format '-99999999') ERC, "
+                "ActRowCount (format '99999999') ARC, "
+                "EstRowCountSkew (format '-99999999') ERCS, "
+                "ActRowCountSkew (format '99999999') ARCS, "
+                "EstRowCountSkewMatch (format '-99999999') ERCSM, "
+                "ActRowCountSkewMatch (format '99999999') ARCSM, "
+                "EstElapsedTime (format '99999') EET, "
+                "ActElapsedTime (format '99999') AET "
+                f"from table (MonitorSQLSteps({host_id},{session_no},{logon_pe})) as t2"
+            )
+            steps = tdconn.cursor()
+            steps.execute(query)
+            return steps.description, list(steps.fetchall()), host_id, logon_pe
+        description, rows, host_id, logon_pe = await asyncio.to_thread(_run)
+
+    if host_id is None:
+        # No matching session — return an empty graph rather than an error so
+        # the UI bundle still renders cleanly.
+        graph = build_explain_graph([], session_no=session_no)
+        summary = types.TextContent(
+            type="text",
+            text=f"visualize_sql_steps: session {session_no} not found",
+        )
+        return ([summary], graph)
+
+    _cols, dicts = _rows_as_dicts(description, rows)
+    graph = build_explain_graph(dicts, session_no=session_no)
+    meta = graph["meta"]
+    summary = types.TextContent(
+        type="text",
+        text=(
+            f"visualize_sql_steps: session {session_no} · "
+            f"{meta['total_steps']} steps · "
+            f"est {meta['est_elapsed_cs']:,} cs · "
+            f"max est rows {meta['max_est_rows']:,}"
+        ),
+    )
+    return ([summary], graph)
+
+
 # Dispatcher -------------------------------------------------------------------
 
 
@@ -592,4 +874,6 @@ async def handle_visualize_tool_call(
         return await _visualize_awt()
     if name == "visualize_query_log":
         return await _visualize_query_log(args["user"])
+    if name == "visualize_sql_steps":
+        return await _visualize_sql_steps(args["sessionNo"])
     return None

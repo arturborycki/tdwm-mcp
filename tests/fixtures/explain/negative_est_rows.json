@@ -1,0 +1,5 @@
+[
+  {"SQLStep": "LOCK step", "Num": 1, "C": 1, "ERC": 0, "ARC": 0, "EET": 1, "AET": 1},
+  {"SQLStep": "Step with unknown estimate", "Num": 2, "C": 2, "ERC": -1, "ARC": 9000, "EET": 800, "AET": 750},
+  {"SQLStep": "Another unknown", "Num": 3, "C": 2, "ERC": -9999999, "ARC": 12000, "EET": 1500, "AET": 1400}
+]

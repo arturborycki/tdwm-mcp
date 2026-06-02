@@ -1,0 +1,7 @@
+[
+  {"SQLStep": "Third", "Num": 3, "C": 0, "ERC": 9800, "ARC": 12000, "EET": 1200, "AET": 1150},
+  {"SQLStep": "First", "Num": 1, "C": 1, "ERC": 0, "ARC": 0, "EET": 1, "AET": 1},
+  {"SQLStep": "Second", "Num": 2, "C": 1, "ERC": 1200, "ARC": 1180, "EET": 4500, "AET": 4200},
+  {"SQLStep": "Fifth", "Num": 5, "C": 2, "ERC": 1, "ARC": 1, "EET": 1, "AET": 1},
+  {"SQLStep": "Fourth", "Num": 4, "C": 3, "ERC": 50, "ARC": 50, "EET": 200, "AET": 195}
+]

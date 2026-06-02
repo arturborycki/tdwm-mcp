@@ -1,0 +1,5 @@
+[
+  {"SQLStep": "Step with nothing but the basics", "Num": 1, "C": null, "ERC": null, "ARC": null, "EET": null, "AET": null},
+  {"SQLStep": null, "Num": 2, "C": 1, "ERC": 500, "ARC": null, "EET": 250, "AET": null},
+  {"Num": 3, "C": 1, "ERC": 800, "ARC": 850, "EET": 600, "AET": 590}
+]

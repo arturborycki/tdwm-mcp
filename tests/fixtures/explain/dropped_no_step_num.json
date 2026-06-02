@@ -1,0 +1,5 @@
+[
+  {"SQLStep": "Valid", "Num": 1, "C": 1, "ERC": 100, "ARC": 100, "EET": 10, "AET": 10},
+  {"SQLStep": "No step number — should be dropped", "C": 1, "ERC": 200, "ARC": 200, "EET": 20, "AET": 20},
+  {"SQLStep": "Also valid", "Num": 2, "C": 1, "ERC": 300, "ARC": 300, "EET": 30, "AET": 30}
+]

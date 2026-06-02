@@ -1,0 +1,7 @@
+[
+  {"SQLStep": "LOCK ROW for ACCESS on myDB.Sales", "Num": 1, "C": 1, "ERC": 0, "ARC": 0, "EET": 1, "AET": 1},
+  {"SQLStep": "We do an all-AMPs RETRIEVE step from myDB.Sales by way of an all-rows scan with no residual conditions into Spool 1 (all_amps), which is built locally on the AMPs.", "Num": 2, "C": 1, "ERC": 1200, "ARC": 1180, "EET": 4500, "AET": 4200},
+  {"SQLStep": "We do an all-AMPs HASH JOIN of Spool 1 and Spool 2.", "Num": 3, "C": 0, "ERC": 9800, "ARC": 12000, "EET": 1200, "AET": 1150},
+  {"SQLStep": "We do an all-AMPs SUM step grouping Spool 1 by region.", "Num": 4, "C": 3, "ERC": 50, "ARC": 50, "EET": 200, "AET": 195},
+  {"SQLStep": "Finally, we send out an END TRANSACTION step to all AMPs involved in processing the request.", "Num": 5, "C": 2, "ERC": 1, "ARC": 1, "EET": 1, "AET": 1}
+]

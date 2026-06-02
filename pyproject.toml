@@ -37,3 +37,9 @@ tdwm-mcp = "tdwm_mcp:main"
 # non-Python files under the package directory automatically.
 [tool.hatch.build.targets.wheel]
 packages = ["src/tdwm_mcp"]
+
+[tool.uv]
+dev-dependencies = [
+    "pytest>=9.0.3",
+    "pytest-asyncio>=1.4.0",
+]

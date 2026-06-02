@@ -1,0 +1,7 @@
+[
+  {"SQLStep": "LOCK", "Num": 1, "C": "H", "ERC": 0, "ARC": 0, "EET": 1, "AET": 1},
+  {"SQLStep": "Scan", "Num": 2, "C": "L", "ERC": 1200, "ARC": 1180, "EET": 4500, "AET": 4200},
+  {"SQLStep": "Join", "Num": 3, "C": "J", "ERC": 9800, "ARC": 12000, "EET": 1200, "AET": 1150},
+  {"SQLStep": "Final", "Num": 4, "C": "N", "ERC": 1, "ARC": 1, "EET": 1, "AET": 1},
+  {"SQLStep": "Weird", "Num": 5, "C": "Z", "ERC": 50, "ARC": 50, "EET": 100, "AET": 100}
+]
