@@ -29,6 +29,7 @@ logger = logging.getLogger(__name__)
 # Multiple tools can share one bundle (tier-2 chart tools will share "generic").
 _TOOL_TO_APP: dict[str, str] = {
     "visualize_ping": "hello",
+    "visualize_demo": "generic",
 }
 
 
@@ -57,7 +58,20 @@ def list_visualize_tools() -> list[types.Tool]:
                 "inputSchema": {"type": "object", "properties": {}},
                 "_meta": {"ui": {"resourceUri": ui_uri_for("visualize_ping")}},
             }
-        )
+        ),
+        types.Tool.model_validate(
+            {
+                "name": "visualize_demo",
+                "description": (
+                    "Render fixture tabular data through the generic chart bundle. "
+                    "PR2 smoke test — exercises auto column detection, chart-type "
+                    "picker, and host-theme propagation. Removed when real tier-2 "
+                    "visualize tools land in PR3."
+                ),
+                "inputSchema": {"type": "object", "properties": {}},
+                "_meta": {"ui": {"resourceUri": ui_uri_for("visualize_demo")}},
+            }
+        ),
     ]
 
 
@@ -102,6 +116,32 @@ async def _visualize_ping() -> ToolResult:
     return ([summary], structured)
 
 
+_DEMO_ROWS = [
+    {"workload": "Tactical",   "queries": 124, "cpu_pct": 18.4, "io_mb": 412.1},
+    {"workload": "Reporting",  "queries":  87, "cpu_pct": 41.0, "io_mb": 980.7},
+    {"workload": "ETL",        "queries":  22, "cpu_pct": 26.8, "io_mb": 5301.2},
+    {"workload": "Ad-hoc",     "queries":  61, "cpu_pct": 12.1, "io_mb": 304.0},
+    {"workload": "Maintenance","queries":   6, "cpu_pct":  1.2, "io_mb":  17.5},
+]
+
+
+async def _visualize_demo() -> ToolResult:
+    structured = {
+        "title": "Demo: workload activity (fixture)",
+        "data": _DEMO_ROWS,
+        "meta": {"row_count": len(_DEMO_ROWS), "source": "PR2 fixture"},
+    }
+    summary = types.TextContent(
+        type="text",
+        text=(
+            f"visualize_demo: {len(_DEMO_ROWS)} workloads · "
+            f"max CPU {max(r['cpu_pct'] for r in _DEMO_ROWS):.1f}% · "
+            f"max IO {max(r['io_mb'] for r in _DEMO_ROWS):.0f} MB"
+        ),
+    )
+    return ([summary], structured)
+
+
 async def handle_visualize_tool_call(
     name: str, arguments: dict[str, Any] | None
 ) -> ToolResult | None:
@@ -112,6 +152,8 @@ async def handle_visualize_tool_call(
     """
     if name == "visualize_ping":
         return await _visualize_ping()
+    if name == "visualize_demo":
+        return await _visualize_demo()
     return None
 
 

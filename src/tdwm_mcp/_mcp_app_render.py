@@ -35,9 +35,19 @@ def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
+_PREAMBLE_FILENAME = "theme.js"  # always prepended to each app module if present
+
+
 @lru_cache(maxsize=None)
 def render_app_html(app_name: str) -> str:
-    """Return the rendered HTML for a named app (e.g. ``"hello"``).
+    """Return the rendered HTML for a named app (e.g. ``"hello"``, ``"generic"``).
+
+    Bundle layout inside the single ``<script type="module">`` body:
+
+    1. The vendored ext-apps SDK (self-contained ESM, defines ``App``).
+    2. ``app/theme.js`` if present — shared helpers, declared as plain
+       module-scope functions so the app code can call them directly.
+    3. ``app/<app_name>.js`` — the per-app code.
 
     Result is cached for the lifetime of the process; vendor and template
     files are static, so this is safe and gives hosts a stable byte stream
@@ -48,12 +58,16 @@ def render_app_html(app_name: str) -> str:
     ext_apps = _read(_VENDOR_DIR / _EXT_APPS_FILENAME)
     app_code = _read(_APP_DIR / f"{app_name}.js")
 
+    preamble_path = _APP_DIR / _PREAMBLE_FILENAME
+    preamble = _read(preamble_path) if preamble_path.is_file() else ""
+    app_block = f"{preamble}\n{app_code}" if preamble else app_code
+
     html = (
         template
         .replace("__CSP__", MCP_APP_CSP)
         .replace("__ECHARTS_UMD__", echarts)
         .replace("__EXT_APPS_ESM__", ext_apps)
-        .replace("__APP_CODE__", app_code)
+        .replace("__APP_CODE__", app_block)
     )
     return html
 
@@ -62,4 +76,4 @@ def available_apps() -> list[str]:
     """List app names with a corresponding ``app/<name>.js`` file."""
     if not _APP_DIR.is_dir():
         return []
-    return sorted(p.stem for p in _APP_DIR.glob("*.js"))
+    return sorted(p.stem for p in _APP_DIR.glob("*.js") if p.name != _PREAMBLE_FILENAME)
