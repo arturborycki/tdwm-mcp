@@ -397,6 +397,87 @@ fnc_common.py (uses connection_manager, queryband, retry_utils)
 - **activate_ruleset** - Apply all pending changes to make them live
 - **list_rulesets** - List all available rulesets
 
+## Visualizations (MCP Apps)
+
+Companion `visualize_*` tools render their results as interactive charts via
+the [MCP Apps extension](https://modelcontextprotocol.io/extensions/apps/overview)
+(SEP-1865, stabilized 2026-01-26). Each tool is a thin sibling of a data tool:
+same SQL and same connection path, with a richer return envelope that lets
+UI-supporting hosts render an inline chart instead of a JSON blob.
+
+These tools are **additive** — the original data tools are unchanged. Pick
+whichever fits the question: `show_tdwm_summary` for raw rows, or
+`visualize_tdwm_summary` for an inline bar/pie chart.
+
+### Available visualize tools
+
+| Tool | Sibling data tool | Bundle |
+|------|-------------------|--------|
+| `visualize_ping` | (smoke test for the MCP Apps wiring) | `hello` |
+| `visualize_tdwm_summary` | `show_tdwm_summary` | `generic` |
+| `visualize_top_users` | `show_top_users` | `generic` |
+| `visualize_throttle_statistics` | `show_trottle_statistics` | `generic` |
+| `visualize_tasm_statistics` | `show_tasm_statistics` | `generic` |
+| `visualize_tasm_event_history` | `show_tasm_even_history` | `generic` |
+| `visualize_delay_queue` | `display_delay_queue` / `list_delayed_request` | `generic` |
+| `visualize_amp_load` | `monitor_amp_load` | `generic` |
+| `visualize_awt` | `monitor_awt` | `generic` |
+| `visualize_query_log` | `show_query_log` | `generic` |
+| `visualize_sql_steps` | `show_sql_steps_for_session` | `sql-steps` (visual EXPLAIN) |
+
+The **generic** bundle is a chart picker: it auto-detects column types
+(numeric / date / string), lets you switch between bar, line, area, pie, and
+scatter, and pick the X-axis column. The **sql-steps** bundle is a bespoke
+visual EXPLAIN: an echarts `graph` series where nodes are SQL plan steps
+sized by estimated rows and colored by confidence
+(`HIGH` / `LOW` / `NO` / `JOIN`), with edges in step-number order.
+
+### How the rendering works
+
+Each `visualize_*` tool returns:
+
+- A short `TextContent` summary (≤120 chars) — what non-UI clients see.
+- A `structuredContent` payload — what the bundle reads.
+- A `_meta.ui.resourceUri` pointing at `ui://<tool>/mcp-app.html` — what the
+  host uses to fetch the bundle.
+
+Hosts that support the extension fetch the bundle once (cached by URI),
+sandbox it in an iframe, and pipe `structuredContent` to it. The bundle
+renders echarts in-place. Hosts that don't support the extension display the
+text summary — never a JSON blob.
+
+### Client support matrix
+
+| Client | UI render | Notes |
+|--------|-----------|-------|
+| Claude / Claude Desktop | ✅ | Native MCP Apps support |
+| Claude Code | ✅ | Native MCP Apps support |
+| ChatGPT | ✅ | Native MCP Apps support |
+| VS Code Copilot Chat | ✅ | Native MCP Apps support |
+| Goose | ✅ | Native MCP Apps support |
+| Postman | ✅ | Native MCP Apps support |
+| MCPJam | ✅ | Native MCP Apps support |
+| Archestra | ✅ | Native MCP Apps support |
+| mcp-inspector | text fallback | Falls back to `TextContent` summary |
+| Cline | text fallback | No `_meta.ui` handling today |
+| Continue | text fallback | No `_meta.ui` handling today |
+| Codex Desktop | text fallback | Tracked in [openai/codex#21019](https://github.com/openai/codex/issues/21019) |
+
+### Bundle internals
+
+`src/tdwm_mcp/mcp-app/` holds the static HTML/JS that ships with the wheel.
+The Python server concatenates a small template, the vendored
+`@modelcontextprotocol/ext-apps` ESM bundle, the vendored `echarts` UMD,
+and the per-app JavaScript into a single self-contained HTML response.
+**No Node toolchain is required to build or install the server** — all the
+JavaScript is vendored as static files.
+
+A locked Content Security Policy is declared on every UI resource
+(`default-src 'none'`, no external origins). Because the entire JS is
+inlined, the bundle never touches the network at render time.
+
+To refresh the vendored libraries, see `CONTRIBUTING.md`.
+
 ## Available Resources
 
 ### Reference Data Resources
