@@ -768,25 +768,6 @@ async def show_tasm_rule_history_red() -> ResponseType:
             logger.error(f"Error showing TASM rule history: {e}")
             return format_error_response("Failed to show TASM rule history. Check server logs for details.")
 
-@with_connection_retry()
-async def get_active_ruleset_name() -> str:
-    """Get the currently active ruleset name."""
-    try:
-        async with acquire_connection() as tdconn:
-            cur = tdconn.cursor()
-            rows = cur.execute("""
-                SELECT ConfigName
-                FROM TDWM.Configurations
-                WHERE ActiveFlag = 'Y'
-                LIMIT 1
-            """)
-            result = rows.fetchone()
-            return result[0] if result else "MyFirstConfig"
-    except Exception as e:
-        logger.warning(f"Error getting active ruleset, using default: {e}")
-        return "MyFirstConfig"
-
-
 # --- MCP Handler Functions ---
 
 async def handle_list_tools() -> list[types.Tool]:

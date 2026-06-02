@@ -65,13 +65,13 @@ class OAuthContext:
             'show_sql_steps_for_session': 'read',
             'show_sql_text_for_session': 'read',
             'monitor_session_query_band': 'monitor',
-            
+
             # System monitoring tools
             'monitor_amp_load': 'monitor',
-            'monitor_awt': 'monitor', 
+            'monitor_awt': 'monitor',
             'monitor_config': 'monitor',
             'show_physical_resources': 'read',
-            
+
             # Workload management tools
             'list_active_WD': 'read',
             'list_WD': 'read',
@@ -80,17 +80,12 @@ class OAuthContext:
             'display_delay_queue': 'read',
             'show_trottle_statistics': 'read',
             'list_query_band': 'read',
-            
+
             # Administrative tools
             'abort_sessions_user': 'admin',
             'abort_delayed_request': 'admin',
             'release_delay_queue': 'admin',
-            'create_filter_rule': 'admin',
-            'add_class_criteria': 'admin',
-            'enable_filter_in_default': 'admin',
-            'enable_filter_rule': 'admin',
-            'activate_rulset': 'admin',
-            
+
             # Query and analysis tools
             'show_query_log': 'query',
             'show_top_users': 'query',
@@ -98,12 +93,31 @@ class OAuthContext:
             'show_tasm_statistics': 'monitor',
             'show_tasm_even_history': 'read',
             'show_tasm_rule_history_red': 'read',
-            
+
             # System information tools
             'identify_blocking': 'read',
             'list_utility_stats': 'read',
             'show_cod_limits': 'read',
             'tdwm_list_clasification': 'read',
+
+            # Priority 1 – Throttle management
+            'create_system_throttle': 'admin',
+            'modify_throttle_limit': 'admin',
+            'delete_throttle': 'admin',
+            'enable_throttle': 'admin',
+            'disable_throttle': 'admin',
+
+            # Priority 1 – Filter management
+            'create_filter': 'admin',
+            'delete_filter': 'admin',
+            'enable_filter': 'admin',
+            'disable_filter': 'admin',
+
+            # Priority 1 – Rule management
+            'add_classification_to_rule': 'admin',
+            'add_subcriteria_to_target': 'admin',
+            'activate_ruleset': 'admin',
+            'list_rulesets': 'read',
         }
         
         return tool_operation_map.get(tool_name, 'read')

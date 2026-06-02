@@ -37,6 +37,9 @@ class OAuthConfig:
     authorization_server_metadata_url: str = ""
     openid_configuration_url: str = ""
     
+    # Keycloak context path — empty string for Keycloak v17+ (Quarkus), "/auth" for legacy WildFly
+    keycloak_auth_path: str = ""
+
     # Security settings
     validate_audience: bool = True
     validate_scopes: bool = True
@@ -79,7 +82,8 @@ class OAuthConfig:
         
         # Build endpoints
         keycloak_base_url = keycloak_url.rstrip('/')
-        realm_base_url = f"{keycloak_base_url}/auth/realms/{realm}"
+        keycloak_auth_path = os.getenv('KEYCLOAK_AUTH_PATH', '')
+        realm_base_url = f"{keycloak_base_url}{keycloak_auth_path}/realms/{realm}"
         
         # Token validation endpoints
         token_validation_endpoint = os.getenv(
@@ -113,6 +117,7 @@ class OAuthConfig:
             jwks_endpoint=jwks_endpoint,
             authorization_server_metadata_url=authorization_server_metadata_url,
             openid_configuration_url=openid_configuration_url,
+            keycloak_auth_path=keycloak_auth_path,
             validate_audience=validate_audience,
             validate_scopes=validate_scopes,
             require_https=require_https
@@ -149,7 +154,7 @@ class OAuthConfig:
     
     def get_issuer_url(self) -> str:
         """Get the OAuth issuer URL."""
-        return f"{self.keycloak_url.rstrip('/')}/auth/realms/{self.realm}"
+        return f"{self.keycloak_url.rstrip('/')}{self.keycloak_auth_path}/realms/{self.realm}"
     
     def get_authorization_endpoint(self) -> str:
         """Get the authorization endpoint URL."""

@@ -1,0 +1,219 @@
+diff --git a/src/tdwm_mcp/auth/config.py b/src/tdwm_mcp/auth/config.py
+index 3f4feec..f2dcf56 100644
+--- a/src/tdwm_mcp/auth/config.py
++++ b/src/tdwm_mcp/auth/config.py
+@@ -37,6 +37,9 @@ class OAuthConfig:
+     authorization_server_metadata_url: str = ""
+     openid_configuration_url: str = ""
+     
++    # Keycloak context path — empty string for Keycloak v17+ (Quarkus), "/auth" for legacy WildFly
++    keycloak_auth_path: str = ""
++
+     # Security settings
+     validate_audience: bool = True
+     validate_scopes: bool = True
+@@ -79,7 +82,8 @@ class OAuthConfig:
+         
+         # Build endpoints
+         keycloak_base_url = keycloak_url.rstrip('/')
+-        realm_base_url = f"{keycloak_base_url}/auth/realms/{realm}"
++        keycloak_auth_path = os.getenv('KEYCLOAK_AUTH_PATH', '')
++        realm_base_url = f"{keycloak_base_url}{keycloak_auth_path}/realms/{realm}"
+         
+         # Token validation endpoints
+         token_validation_endpoint = os.getenv(
+@@ -113,6 +117,7 @@ class OAuthConfig:
+             jwks_endpoint=jwks_endpoint,
+             authorization_server_metadata_url=authorization_server_metadata_url,
+             openid_configuration_url=openid_configuration_url,
++            keycloak_auth_path=keycloak_auth_path,
+             validate_audience=validate_audience,
+             validate_scopes=validate_scopes,
+             require_https=require_https
+@@ -149,7 +154,7 @@ class OAuthConfig:
+     
+     def get_issuer_url(self) -> str:
+         """Get the OAuth issuer URL."""
+-        return f"{self.keycloak_url.rstrip('/')}/auth/realms/{self.realm}"
++        return f"{self.keycloak_url.rstrip('/')}{self.keycloak_auth_path}/realms/{self.realm}"
+     
+     def get_authorization_endpoint(self) -> str:
+         """Get the authorization endpoint URL."""
+diff --git a/src/tdwm_mcp/auth/metadata.py b/src/tdwm_mcp/auth/metadata.py
+index 8864233..3e39c9d 100644
+--- a/src/tdwm_mcp/auth/metadata.py
++++ b/src/tdwm_mcp/auth/metadata.py
+@@ -179,13 +179,13 @@ class ProtectedResourceMetadata:
+             'show_sql_steps_for_session': 'read',
+             'show_sql_text_for_session': 'read',
+             'monitor_session_query_band': 'monitor',
+-            
++
+             # System monitoring tools
+             'monitor_amp_load': 'monitor',
+-            'monitor_awt': 'monitor', 
++            'monitor_awt': 'monitor',
+             'monitor_config': 'monitor',
+             'show_physical_resources': 'read',
+-            
++
+             # Workload management tools
+             'list_active_WD': 'read',
+             'list_WD': 'read',
+@@ -194,17 +194,12 @@ class ProtectedResourceMetadata:
+             'display_delay_queue': 'read',
+             'show_trottle_statistics': 'read',
+             'list_query_band': 'read',
+-            
++
+             # Administrative tools
+             'abort_sessions_user': 'admin',
+             'abort_delayed_request': 'admin',
+             'release_delay_queue': 'admin',
+-            'create_filter_rule': 'admin',
+-            'add_class_criteria': 'admin',
+-            'enable_filter_in_default': 'admin',
+-            'enable_filter_rule': 'admin',
+-            'activate_rulset': 'admin',
+-            
++
+             # Query and analysis tools
+             'show_query_log': 'query',
+             'show_top_users': 'query',
+@@ -212,12 +207,31 @@ class ProtectedResourceMetadata:
+             'show_tasm_statistics': 'monitor',
+             'show_tasm_even_history': 'read',
+             'show_tasm_rule_history_red': 'read',
+-            
++
+             # System information tools
+             'identify_blocking': 'read',
+             'list_utility_stats': 'read',
+             'show_cod_limits': 'read',
+             'tdwm_list_clasification': 'read',
++
++            # Priority 1 – Throttle management
++            'create_system_throttle': 'admin',
++            'modify_throttle_limit': 'admin',
++            'delete_throttle': 'admin',
++            'enable_throttle': 'admin',
++            'disable_throttle': 'admin',
++
++            # Priority 1 – Filter management
++            'create_filter': 'admin',
++            'delete_filter': 'admin',
++            'enable_filter': 'admin',
++            'disable_filter': 'admin',
++
++            # Priority 1 – Rule management
++            'add_classification_to_rule': 'admin',
++            'add_subcriteria_to_target': 'admin',
++            'activate_ruleset': 'admin',
++            'list_rulesets': 'read',
+         }
+         
+         operation_type = tool_operation_mapping.get(tool_name, 'read')
+diff --git a/src/tdwm_mcp/fnc_tools.py b/src/tdwm_mcp/fnc_tools.py
+index 7bb9964..cdf2265 100644
+--- a/src/tdwm_mcp/fnc_tools.py
++++ b/src/tdwm_mcp/fnc_tools.py
+@@ -768,25 +768,6 @@ async def show_tasm_rule_history_red() -> ResponseType:
+             logger.error(f"Error showing TASM rule history: {e}")
+             return format_error_response("Failed to show TASM rule history. Check server logs for details.")
+ 
+-@with_connection_retry()
+-async def get_active_ruleset_name() -> str:
+-    """Get the currently active ruleset name."""
+-    try:
+-        async with acquire_connection() as tdconn:
+-            cur = tdconn.cursor()
+-            rows = cur.execute("""
+-                SELECT ConfigName
+-                FROM TDWM.Configurations
+-                WHERE ActiveFlag = 'Y'
+-                LIMIT 1
+-            """)
+-            result = rows.fetchone()
+-            return result[0] if result else "MyFirstConfig"
+-    except Exception as e:
+-        logger.warning(f"Error getting active ruleset, using default: {e}")
+-        return "MyFirstConfig"
+-
+-
+ # --- MCP Handler Functions ---
+ 
+ async def handle_list_tools() -> list[types.Tool]:
+diff --git a/src/tdwm_mcp/oauth_context.py b/src/tdwm_mcp/oauth_context.py
+index a09d847..7224009 100644
+--- a/src/tdwm_mcp/oauth_context.py
++++ b/src/tdwm_mcp/oauth_context.py
+@@ -65,13 +65,13 @@ class OAuthContext:
+             'show_sql_steps_for_session': 'read',
+             'show_sql_text_for_session': 'read',
+             'monitor_session_query_band': 'monitor',
+-            
++
+             # System monitoring tools
+             'monitor_amp_load': 'monitor',
+-            'monitor_awt': 'monitor', 
++            'monitor_awt': 'monitor',
+             'monitor_config': 'monitor',
+             'show_physical_resources': 'read',
+-            
++
+             # Workload management tools
+             'list_active_WD': 'read',
+             'list_WD': 'read',
+@@ -80,17 +80,12 @@ class OAuthContext:
+             'display_delay_queue': 'read',
+             'show_trottle_statistics': 'read',
+             'list_query_band': 'read',
+-            
++
+             # Administrative tools
+             'abort_sessions_user': 'admin',
+             'abort_delayed_request': 'admin',
+             'release_delay_queue': 'admin',
+-            'create_filter_rule': 'admin',
+-            'add_class_criteria': 'admin',
+-            'enable_filter_in_default': 'admin',
+-            'enable_filter_rule': 'admin',
+-            'activate_rulset': 'admin',
+-            
++
+             # Query and analysis tools
+             'show_query_log': 'query',
+             'show_top_users': 'query',
+@@ -98,12 +93,31 @@ class OAuthContext:
+             'show_tasm_statistics': 'monitor',
+             'show_tasm_even_history': 'read',
+             'show_tasm_rule_history_red': 'read',
+-            
++
+             # System information tools
+             'identify_blocking': 'read',
+             'list_utility_stats': 'read',
+             'show_cod_limits': 'read',
+             'tdwm_list_clasification': 'read',
++
++            # Priority 1 – Throttle management
++            'create_system_throttle': 'admin',
++            'modify_throttle_limit': 'admin',
++            'delete_throttle': 'admin',
++            'enable_throttle': 'admin',
++            'disable_throttle': 'admin',
++
++            # Priority 1 – Filter management
++            'create_filter': 'admin',
++            'delete_filter': 'admin',
++            'enable_filter': 'admin',
++            'disable_filter': 'admin',
++
++            # Priority 1 – Rule management
++            'add_classification_to_rule': 'admin',
++            'add_subcriteria_to_target': 'admin',
++            'activate_ruleset': 'admin',
++            'list_rulesets': 'read',
+         }
+         
+         return tool_operation_map.get(tool_name, 'read')
